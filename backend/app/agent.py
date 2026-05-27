@@ -13,7 +13,7 @@ It has:
 from langgraph.graph import StateGraph, END
 from typing import Dict, Any, TypedDict, Optional, List
 from app.pipeline.classifier import classify_input
-from app.pipeline.extractor import extract_content
+from app.pipeline.extractor import extract_content, has_pending_transcription, get_video_id
 from app.pipeline.understander import understand_recipe
 from app.pipeline.normalizer import normalize_ingredients
 from app.pipeline.optimizer import rank_and_optimize
@@ -155,6 +155,25 @@ async def extract_node(state: GraphState) -> GraphState:
             "stage": "extract", "status": "done",
             "source": source, "word_count": word_count, "duration_ms": duration
         })
+
+        # ── "202 Accepted" pattern: background audio enrichment ──
+        # If we got a metadata_fallback and there's a background
+        # transcription running, notify the frontend so it can
+        # show a secondary progress indicator.
+        if source == "metadata_fallback" and state.get("input_type") == "youtube":
+            video_id = get_video_id(state["raw_input"])
+            if video_id and has_pending_transcription(video_id):
+                logger.info(
+                    "node.extract.background_transcription_pending",
+                    session_id=state["session_id"],
+                    video_id=video_id,
+                )
+                await emit_sse(state["session_id"], {
+                    "stage": "extract",
+                    "status": "processing_audio",
+                    "message": "Deep audio analysis in progress...",
+                    "video_id": video_id,
+                })
 
         trace = state.get("pipeline_trace", []) + [
             _trace_entry("extract", "done", f"{word_count} words from {source}", duration)

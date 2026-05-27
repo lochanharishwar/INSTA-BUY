@@ -11,6 +11,7 @@ from app.agent import build_graph, emit_sse
 import app.agent as agent_module
 from app.mcp.auth import MCPAuth
 from app.mcp.client import MCPClient
+from app.pipeline import extractor as extractor_module
 
 from app.logging_config import configure_logging
 
@@ -41,6 +42,7 @@ async def push_sse(session_id: str, data: dict):
         await event_queues[session_id].put(data)
 
 agent_module.emit_sse = push_sse
+extractor_module.set_sse_emitter(push_sse)
 
 graphs_state: Dict[str, Any] = {}
 

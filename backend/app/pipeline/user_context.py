@@ -3,9 +3,14 @@ User Context Intelligence Layer
 
 Builds a rich user profile from Swiggy MCP data (order history, go-to items)
 to enable context-aware, personalized cart optimization.
+
+Now also populates a per-user vector-embedded inventory via ChromaDB so the
+optimizer can semantically detect "pantry likely" items instead of relying
+on a hardcoded set.
 """
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
+import time
 import structlog
 from app.mcp.client import MCPClient
 
@@ -23,6 +28,12 @@ class UserContext:
     order_count: int = 0
     address_id: str = ""
     address_label: str = ""
+    session_id: str = ""
+    # ── New: vector inventory tracking ─────────────────────────────
+    inventory_embedded: bool = False
+    inventory_item_count: int = 0
+    inventory_active_count: int = 0
+    inventory_expired_count: int = 0
 
 
 async def build_user_context(session_id: str) -> UserContext:
@@ -30,12 +41,13 @@ async def build_user_context(session_id: str) -> UserContext:
     Build a UserContext by calling Swiggy MCP tools:
     1. get_addresses → resolve delivery address
     2. your_go_to_items → user's frequently ordered products
-    3. get_orders → recent order history for brand preferences
+    3. get_orders → past 30 days of order history for brand preferences
+       AND vector inventory embedding
     
     This context is injected into the optimizer to make the agent
     context-aware and personalized.
     """
-    ctx = UserContext()
+    ctx = UserContext(session_id=session_id)
     client = MCPClient(session_id)
 
     # ─── Step 1: Resolve address ──────────────────────────────────
@@ -79,15 +91,19 @@ async def build_user_context(session_id: str) -> UserContext:
     except Exception as e:
         logger.warning("user_context.go_to_failed", error=str(e)[:100])
 
-    # ─── Step 3: Analyze recent orders ────────────────────────────
+    # ─── Step 3: Analyse recent orders (expanded to 30 days) ──────
+    all_order_items: List[Dict] = []  # collected for vector embedding
     try:
         orders = await client.call_tool("get_orders", {})
         ctx.order_count = len(orders) if isinstance(orders, list) else 0
 
         # Analyze recent orders for patterns
         if isinstance(orders, list):
-            for order in orders[:5]:  # Last 5 orders
+            for order in orders:  # Process ALL orders (up to 30 days)
                 order_id = order.get("orderId", "")
+                placed_at = order.get("placed_at", "unknown")
+                placed_epoch = _parse_placed_at(placed_at)
+
                 if order_id:
                     try:
                         details = await client.call_tool("get_order_details", {
@@ -96,7 +112,17 @@ async def build_user_context(session_id: str) -> UserContext:
                         items = details.get("items", []) if isinstance(details, dict) else []
                         for item in items:
                             item_name = item.get("name", "").lower()
-                            ctx.recent_purchases[item_name] = order.get("placed_at", "unknown")
+                            ctx.recent_purchases[item_name] = placed_at
+
+                            # Collect for vector embedding
+                            all_order_items.append({
+                                "name": item.get("name", ""),
+                                "brand": item.get("brand", ""),
+                                "quantity": item.get("quantity", 1),
+                                "price": item.get("price", 0),
+                                "order_id": order_id,
+                                "purchased_epoch": placed_epoch,
+                            })
 
                             # Detect dietary signals
                             if any(kw in item_name for kw in ["chicken", "mutton", "fish", "egg"]):
@@ -115,4 +141,112 @@ async def build_user_context(session_id: str) -> UserContext:
     except Exception as e:
         logger.warning("user_context.orders_failed", error=str(e)[:100])
 
+    # ─── Step 4: Embed purchases into vector inventory ────────────
+    await _embed_inventory(session_id, ctx, all_order_items)
+
     return ctx
+
+
+async def _embed_inventory(
+    session_id: str,
+    ctx: UserContext,
+    order_items: List[Dict],
+) -> None:
+    """
+    Embed collected order items into the per-user ChromaDB vector store
+    and refresh decay calculations.
+    """
+    try:
+        from app.database import InventoryVectorStore
+
+        store = InventoryVectorStore(session_id)
+
+        # Also embed go-to items (they're frequently bought → likely in pantry)
+        go_to_as_items = [
+            {
+                "name": item.get("name", ""),
+                "brand": item.get("brand", ""),
+                "quantity": 1,
+                "price": item.get("price", 0),
+                "order_id": "go_to",
+                # Treat go-to items as recently purchased (within last week)
+                "purchased_epoch": time.time() - (3 * 86400),
+            }
+            for item in ctx.go_to_items
+            if item.get("name")
+        ]
+
+        all_items = order_items + go_to_as_items
+        embedded_count = store.upsert_items(all_items)
+
+        # Refresh decay to mark expired items as inactive
+        expired_count = store.refresh_decay()
+
+        # Update context with inventory stats
+        summary = store.get_inventory_summary()
+        ctx.inventory_embedded = True
+        ctx.inventory_item_count = summary.get("total", 0)
+        ctx.inventory_active_count = summary.get("active", 0)
+        ctx.inventory_expired_count = summary.get("expired", 0)
+
+        logger.info(
+            "user_context.inventory_embedded",
+            session_id=session_id,
+            embedded=embedded_count,
+            total=ctx.inventory_item_count,
+            active=ctx.inventory_active_count,
+            expired=ctx.inventory_expired_count,
+        )
+    except Exception as e:
+        logger.warning(
+            "user_context.inventory_embed_failed",
+            error=str(e)[:200],
+        )
+        ctx.inventory_embedded = False
+
+
+def _parse_placed_at(placed_at: str) -> float:
+    """
+    Best-effort parse of the 'placed_at' field from order history.
+    Handles relative strings like "2 days ago", "1 week ago", etc.
+    Falls back to 7 days ago if unparseable.
+    """
+    now = time.time()
+    placed_lower = placed_at.lower().strip()
+
+    try:
+        # Try "N days ago" pattern
+        if "day" in placed_lower:
+            import re
+            m = re.search(r"(\d+)\s*day", placed_lower)
+            if m:
+                return now - int(m.group(1)) * 86400
+
+        # Try "N week(s) ago"
+        if "week" in placed_lower:
+            import re
+            m = re.search(r"(\d+)\s*week", placed_lower)
+            if m:
+                return now - int(m.group(1)) * 7 * 86400
+
+        # Try "N month(s) ago"
+        if "month" in placed_lower:
+            import re
+            m = re.search(r"(\d+)\s*month", placed_lower)
+            if m:
+                return now - int(m.group(1)) * 30 * 86400
+
+        # Try ISO-like date
+        if "-" in placed_lower or "/" in placed_lower:
+            from datetime import datetime
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+                try:
+                    dt = datetime.strptime(placed_lower, fmt)
+                    return dt.timestamp()
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+
+    # Fallback: assume 7 days ago
+    return now - 7 * 86400

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from '../../lib/store'
 import { api } from '../../lib/api'
-import { Youtube, Globe, Type, Sparkles, ArrowRight, Link2, Instagram, Brain, ShoppingCart, Search, Shield, Zap, Moon, Sun, ChefHat } from 'lucide-react'
+import { Youtube, Globe, Type, Sparkles, ArrowRight, Link2, Instagram, Brain, ShoppingCart, Search, Shield, Zap, Moon, Sun, ChefHat, Share2, Copy, Check } from 'lucide-react'
 
 export default function RecipeInput() {
   const [url, setUrl] = useState('')
@@ -11,6 +11,7 @@ export default function RecipeInput() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
+  const [copied, setCopied] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -23,6 +24,43 @@ export default function RecipeInput() {
   const toggleDarkMode = () => {
     setDarkMode(!darkMode)
     document.documentElement.classList.toggle('dark')
+  }
+
+  const handleShare = async () => {
+    const shareData = {
+      title: 'InstaChef AI - Cooking Commerce Agent',
+      text: 'Turn any recipe video, blog, or text into a Swiggy Instamart grocery order in seconds!',
+      url: window.location.href
+    }
+
+    if (navigator.share && navigator.canShare?.(shareData)) {
+      try {
+        await navigator.share(shareData)
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          await copyToClipboard()
+        }
+      }
+    } else {
+      await copyToClipboard()
+    }
+  }
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = window.location.href
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
   }
 
   const handleConnect = async () => {
@@ -123,12 +161,22 @@ export default function RecipeInput() {
     <div className="max-w-3xl mx-auto mt-6 animate-fade-in">
       {/* Header Section */}
       <div className="text-center mb-8 relative">
-        <button
-          onClick={toggleDarkMode}
-          className="absolute top-0 right-0 p-2 rounded-xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-all hover:scale-105"
-        >
-          {darkMode ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-500" />}
-        </button>
+        <div className="absolute top-0 right-0 flex items-center gap-2">
+          <button
+            onClick={handleShare}
+            className="p-2 rounded-xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-all hover:scale-105 flex items-center gap-1.5 text-xs font-medium text-brand-subtle dark:text-dark-subtle"
+            title="Share InstaChef AI"
+          >
+            {copied ? <Check className="w-4 h-4 text-green-500" /> : <Share2 className="w-4 h-4" />}
+            {copied ? 'Copied!' : 'Share'}
+          </button>
+          <button
+            onClick={toggleDarkMode}
+            className="p-2 rounded-xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-all hover:scale-105"
+          >
+            {darkMode ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-500" />}
+          </button>
+        </div>
         
         <div className="inline-flex items-center gap-2 bg-gradient-to-r from-swiggy-50 to-orange-50 dark:from-swiggy-500/10 dark:to-orange-500/10 text-swiggy-700 px-4 py-2 rounded-full text-sm font-medium mb-5 border border-swiggy-100/60 dark:border-swiggy-500/20 shadow-sm animate-fade-in-up">
           <Sparkles className="w-4 h-4 animate-pulse" />

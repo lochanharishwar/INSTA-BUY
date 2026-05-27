@@ -1,22 +1,88 @@
+"""
+Cart Optimizer — Semantic Inventory-Aware Ranking
+
+Replaces static PANTRY_STAPLES / PANTRY_LIKELY sets with dynamic,
+vector-embedded inventory checks via ChromaDB.  For every ingredient,
+a semantic similarity search is run against the user's *active* purchase
+history.  If a match is found (similarity > 0.85 and the item hasn't
+decayed), the ingredient is flagged as `pantry_likely = True` and its
+score is aggressively penalised to prevent auto-carting.
+"""
 from typing import Dict, List, Optional
 from math import ceil
 import structlog
 
 logger = structlog.get_logger()
 
-# ─── Pantry Staples ──────────────────────────────────────────────────
-# Items most Indian kitchens already have. Flag these, don't auto-buy.
-PANTRY_STAPLES = {
-    "salt", "water", "ice", "sugar",
-    "cooking oil", "refined oil", "vegetable oil", "sunflower oil", "oil",
-}
 
-# Items that are LIKELY in pantry but still worth asking about
-PANTRY_LIKELY = {
-    "turmeric", "turmeric powder", "red chilli powder", "chilli powder",
-    "cumin seeds", "cumin", "mustard seeds", "black pepper",
-    "garam masala", "coriander powder", "asafoetida", "hing",
-}
+# ─── Lazy-loaded vector store (per-session) ───────────────────────────
+# Import is deferred to avoid heavy model load at module import time.
+_vector_store_cache: Dict[str, object] = {}
+
+
+def _get_inventory_store(session_id: str):
+    """
+    Get or create an InventoryVectorStore for the given session.
+    Lazy-loads ChromaDB + SentenceTransformer on first call.
+    """
+    if session_id in _vector_store_cache:
+        return _vector_store_cache[session_id]
+
+    try:
+        from app.database import InventoryVectorStore
+        store = InventoryVectorStore(session_id)
+        _vector_store_cache[session_id] = store
+        return store
+    except Exception as e:
+        logger.warning("optimizer.vector_store_unavailable", error=str(e)[:150])
+        return None
+
+
+def _check_pantry_via_vector(
+    ingredient_name: str,
+    session_id: str,
+    similarity_threshold: float = 0.85,
+) -> tuple[bool, List[Dict]]:
+    """
+    Semantic vector search against the user's active inventory.
+
+    Returns:
+        (is_pantry_likely, matches)
+    where `matches` is a list of dicts with similarity scores, brand,
+    decay_ratio, etc.
+    """
+    store = _get_inventory_store(session_id)
+    if store is None:
+        return False, []
+
+    try:
+        matches = store.query_active_inventory(
+            ingredient_name=ingredient_name,
+            n_results=3,
+            similarity_threshold=similarity_threshold,
+        )
+        if matches:
+            logger.info(
+                "optimizer.pantry_vector_hit",
+                ingredient=ingredient_name,
+                top_match=matches[0]["name"],
+                similarity=matches[0]["similarity"],
+                decay_ratio=matches[0]["decay_ratio"],
+            )
+            return True, matches
+    except Exception as e:
+        logger.warning(
+            "optimizer.pantry_vector_error",
+            ingredient=ingredient_name,
+            error=str(e)[:150],
+        )
+    return False, []
+
+
+# ─── Pantry Score Penalty ─────────────────────────────────────────────
+# When an ingredient is detected in active inventory, we aggressively
+# penalise its ranking score so it sinks to the bottom / gets flagged.
+_PANTRY_PENALTY_FACTOR = 0.15  # Multiply score by this → drops ~85%
 
 
 def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], user_context=None) -> List[Dict]:
@@ -24,20 +90,37 @@ def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], 
     Rank products for each ingredient using multi-factor scoring,
     then optimize the overall basket.
     Uses UserContext for brand-preference scoring and go-to item boosting.
+    Uses vector-embedded inventory for dynamic pantry detection.
     """
     cart_items = []
+    session_id = ""
+    if user_context:
+        session_id = getattr(user_context, "session_id", "") or ""
 
     for ing in normalized_ingredients:
         term = ing["search_term"]
         ing_name = ing["ingredient_name"].lower().strip()
         needed_grams = ing.get("quantity_grams")
 
-        # ─── Pantry check ─────────────────────────────────────────
-        if ing_name in PANTRY_STAPLES:
-            cart_items.append(_make_pantry_item(ing, skip=True))
-            continue
+        # ─── Dynamic pantry check via vector inventory ────────────
+        is_pantry_likely, pantry_matches = _check_pantry_via_vector(
+            ingredient_name=ing_name,
+            session_id=session_id,
+        )
 
-        is_pantry_likely = ing_name in PANTRY_LIKELY
+        # If the vector store detected this as a pantry item with very
+        # high confidence (similarity ≥ 0.95), skip it entirely (like
+        # the old PANTRY_STAPLES behaviour)
+        if is_pantry_likely and pantry_matches:
+            top_match = pantry_matches[0]
+            if top_match["similarity"] >= 0.95 and top_match["decay_ratio"] < 0.3:
+                # This is a near-exact match for a very fresh item
+                cart_items.append(_make_pantry_item(
+                    ing,
+                    skip=True,
+                    match_info=top_match,
+                ))
+                continue
 
         results = search_results.get(term, {}).get("products", [])
 
@@ -59,6 +142,18 @@ def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], 
                     needed_grams=needed_grams,
                     user_context=user_context,
                 )
+
+                # ── Pantry penalty: aggressively suppress score ───
+                if is_pantry_likely:
+                    original_score = score
+                    score = score * _PANTRY_PENALTY_FACTOR
+                    reasons.append(
+                        f"🏠 Likely in pantry "
+                        f"(matched \"{pantry_matches[0]['name']}\" "
+                        f"@ {pantry_matches[0]['similarity']:.0%} similarity, "
+                        f"{pantry_matches[0]['days_since_purchase']:.0f}d ago)"
+                    )
+
                 scored_options.append({
                     "product": product,
                     "variant": variant,
@@ -104,6 +199,16 @@ def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], 
             "waste_grams": waste_grams,
             "waste_pct": waste_pct,
             "pantry_likely": is_pantry_likely,
+            "pantry_match": (
+                {
+                    "matched_item": pantry_matches[0]["name"],
+                    "similarity": pantry_matches[0]["similarity"],
+                    "days_ago": pantry_matches[0]["days_since_purchase"],
+                    "decay_ratio": pantry_matches[0]["decay_ratio"],
+                }
+                if is_pantry_likely and pantry_matches
+                else None
+            ),
             "image_url": best["product"].get("image_url"),
             "alternatives": [
                 {
@@ -239,16 +344,25 @@ def _make_unavailable_item(ing: Dict) -> Dict:
         "waste_grams": 0,
         "waste_pct": 0,
         "pantry_likely": False,
+        "pantry_match": None,
         "image_url": None,
         "alternatives": [],
     }
 
 
-def _make_pantry_item(ing: Dict, skip: bool = False) -> Dict:
+def _make_pantry_item(ing: Dict, skip: bool = False, match_info: Dict = None) -> Dict:
+    reasons = ["Common pantry item — you likely have this"]
+    if match_info:
+        reasons = [
+            f"🏠 In your pantry: \"{match_info['name']}\" "
+            f"({match_info['similarity']:.0%} match, "
+            f"bought {match_info['days_since_purchase']:.0f}d ago, "
+            f"{(1 - match_info['decay_ratio']):.0%} freshness)"
+        ]
     return {
         "ingredient_name": ing["ingredient_name"],
         "ingredient_quantity_display": ing["quantity_display"],
-        "product_name": "Pantry Staple — Skipped",
+        "product_name": "Pantry Item — Skipped",
         "product_brand": "",
         "product_quantity_display": "",
         "product_price": 0,
@@ -256,10 +370,11 @@ def _make_pantry_item(ing: Dict, skip: bool = False) -> Dict:
         "quantity": 0,
         "confidence": "pantry",
         "confidence_score": 1.0,
-        "selection_reasons": ["Common pantry item — you likely have this"],
+        "selection_reasons": reasons,
         "waste_grams": 0,
         "waste_pct": 0,
         "pantry_likely": True,
+        "pantry_match": match_info,
         "image_url": None,
         "alternatives": [],
     }
