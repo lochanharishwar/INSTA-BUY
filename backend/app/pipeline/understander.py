@@ -99,7 +99,12 @@ async def understand_recipe(content: str) -> RecipeSchema:
     Results are cached in Redis to avoid re-processing identical content.
     """
     cache_key = f"recipe_v2:{hashlib.sha256(content.encode()).hexdigest()}"
-    cached = redis_client.get(cache_key)
+    cached = None
+    try:
+        cached = redis_client.get(cache_key)
+    except Exception as e:
+        logger.warning("understander.redis_offline", error=str(e)[:100])
+        
     if cached:
         logger.info("understander.cache_hit")
         data = json.loads(cached)
@@ -112,7 +117,10 @@ async def understand_recipe(content: str) -> RecipeSchema:
     if settings.NVIDIA_API_KEY:
         try:
             result = await _call_nvidia(user_prompt)
-            redis_client.setex(cache_key, RECIPE_CACHE_TTL, json.dumps(result.model_dump()))
+            try:
+                redis_client.setex(cache_key, RECIPE_CACHE_TTL, json.dumps(result.model_dump()))
+            except Exception as ree:
+                logger.warning("understander.redis_cache_failed", error=str(ree)[:100])
             return result
         except Exception as e:
             errors.append(f"nvidia: {str(e)[:100]}")
@@ -122,7 +130,10 @@ async def understand_recipe(content: str) -> RecipeSchema:
     if settings.GEMINI_API_KEY:
         try:
             result = await _call_gemini(user_prompt)
-            redis_client.setex(cache_key, RECIPE_CACHE_TTL, json.dumps(result.model_dump()))
+            try:
+                redis_client.setex(cache_key, RECIPE_CACHE_TTL, json.dumps(result.model_dump()))
+            except Exception as ree:
+                logger.warning("understander.redis_cache_failed", error=str(ree)[:100])
             return result
         except Exception as e:
             errors.append(f"gemini: {str(e)[:100]}")

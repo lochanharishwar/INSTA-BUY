@@ -69,6 +69,8 @@ tsconfig.tsbuildinfo
 scratch_*.py
 test_*.py
 *.tmp
+backend/scratch/
+scratch/
 
 # ─── Agent / AI tool artifacts (not source code) ─────────────────────
 TODO.md

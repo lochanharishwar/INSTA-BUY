@@ -8,11 +8,15 @@ export interface AppState {
   pipeline_events: any[];
   cart_proposal: any;
   order_id: string | null;
+  session_type: "solo" | "group";
+  contributors: any[];
   setSessionId: (id: string) => void;
   setScreen: (screen: ScreenState) => void;
   addEvent: (event: any) => void;
   setCartProposal: (proposal: any) => void;
   setOrderId: (id: string) => void;
+  setSessionType: (type: "solo" | "group") => void;
+  setContributors: (contributors: any[]) => void;
   reset: () => void;
 }
 
@@ -22,10 +26,14 @@ export const useStore = create<AppState>((set) => ({
   pipeline_events: [],
   cart_proposal: null,
   order_id: null,
+  session_type: "solo",
+  contributors: [],
   setSessionId: (id) => set({ session_id: id }),
   setScreen: (screen) => set({ screen }),
   addEvent: (event) => set((state) => ({ pipeline_events: [...state.pipeline_events, event] })),
   setCartProposal: (proposal) => set({ cart_proposal: proposal }),
   setOrderId: (id) => set({ order_id: id }),
-  reset: () => set({ screen: "input", pipeline_events: [], cart_proposal: null, order_id: null }),
+  setSessionType: (type) => set({ session_type: type }),
+  setContributors: (contributors) => set({ contributors }),
+  reset: () => set({ screen: "input", pipeline_events: [], cart_proposal: null, order_id: null, session_type: "solo", contributors: [] }),
 }))

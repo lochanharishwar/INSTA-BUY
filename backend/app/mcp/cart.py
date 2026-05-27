@@ -23,13 +23,26 @@ class CartManager:
         cart = await self.client.call_tool("get_cart", {})
         return cart.get("bill", {}).get("total", sum([item.get("product_price", 0) * item.get("quantity", 1) for item in items]))
 
-    async def safe_checkout(self) -> str:
+    async def safe_checkout(self, contributors: list = None) -> str:
         max_attempts = 3
         attempt = 0
         while True:
             try:
                 res = await self.client.call_tool("checkout", {"paymentMethod": "COD"})
-                return res.get("orderId")
+                order_id = res.get("orderId")
+                
+                # Log fractional splits on checkout success
+                if contributors:
+                    import structlog
+                    log = structlog.get_logger()
+                    log.info("hostelsync.checkout_payment_splits",
+                             order_id=order_id,
+                             contributors=[{
+                                 "user_id": c.get("user_id"),
+                                 "fraction_owed": c.get("fraction_owed"),
+                                 "amount_owed": c.get("amount_owed")
+                             } for c in contributors])
+                return order_id
             except httpx.HTTPStatusError as e:
                 attempt += 1
                 if e.response.status_code >= 500:
@@ -45,7 +58,18 @@ class CartManager:
                             # For the agent, if an order exists and looks recent, we assume success.
                             latest_order = orders[0]
                             if "mock" in latest_order.get("orderId", "") or "IM-" in latest_order.get("orderId", ""):
-                                return latest_order.get("orderId")
+                                order_id = latest_order.get("orderId")
+                                if contributors:
+                                    import structlog
+                                    log = structlog.get_logger()
+                                    log.info("hostelsync.checkout_payment_splits",
+                                             order_id=order_id,
+                                             contributors=[{
+                                                 "user_id": c.get("user_id"),
+                                                 "fraction_owed": c.get("fraction_owed"),
+                                                 "amount_owed": c.get("amount_owed")
+                                             } for c in contributors])
+                                return order_id
                     except Exception:
                         pass # Ignore errors in the status check and proceed to retry loop
                     

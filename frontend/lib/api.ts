@@ -9,11 +9,28 @@ export const api = {
     const res = await fetch(`${API_URL}/auth/login?session_id=${sessionId}`);
     return res.json();
   },
-  processRecipe: async (sessionId: string, urlOrText: string) => {
+  processRecipe: async (sessionId: string, urlOrText: string, sessionType: "solo" | "group" = "solo", contributors?: any[]) => {
     const res = await fetch(`${API_URL}/api/process`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, url_or_text: urlOrText })
+      body: JSON.stringify({
+        session_id: sessionId,
+        url_or_text: urlOrText,
+        session_type: sessionType,
+        contributors: contributors
+      })
+    });
+    return res.json();
+  },
+  approveContributor: async (sessionId: string, userId: string, approved: boolean) => {
+    const res = await fetch(`${API_URL}/api/cart/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_id: userId,
+        approval_status: approved
+      })
     });
     return res.json();
   },

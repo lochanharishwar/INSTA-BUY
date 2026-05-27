@@ -8,8 +8,9 @@ history.  If a match is found (similarity > 0.85 and the item hasn't
 decayed), the ingredient is flagged as `pantry_likely = True` and its
 score is aggressively penalised to prevent auto-carting.
 """
-from typing import Dict, List, Optional
-from math import ceil
+from typing import Dict, List, Optional, Any
+from math import ceil, sqrt
+from functools import cmp_to_key
 import structlog
 
 logger = structlog.get_logger()
@@ -85,7 +86,81 @@ def _check_pantry_via_vector(
 _PANTRY_PENALTY_FACTOR = 0.15  # Multiply score by this → drops ~85%
 
 
-def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], user_context=None) -> List[Dict]:
+def _cosine_similarity(v1: List[float], v2: List[float]) -> float:
+    dot_product = sum(float(a) * float(b) for a, b in zip(v1, v2))
+    norm_a = sqrt(sum(float(a) * float(a) for a in v1))
+    norm_b = sqrt(sum(float(b) * float(b) for b in v2))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return float(dot_product / (norm_a * norm_b))
+
+
+def _get_embedding_fn():
+    try:
+        from app.database import _get_embedding_function
+        return _get_embedding_function()
+    except Exception as e:
+        logger.warning("optimizer.embedding_fn_unavailable", error=str(e)[:100])
+        return None
+
+
+def _get_name_similarity_fallback(product_name: str, ingredient_name: str) -> float:
+    product_lower = product_name.lower()
+    ingredient_lower = ingredient_name.lower()
+    ing_words = set(ingredient_lower.split())
+    prod_words = set(product_lower.split())
+    overlap = ing_words & prod_words
+    if ing_words:
+        return len(overlap) / len(ing_words)
+    return 0.0
+
+
+def _has_preferred_brand(variant: Dict, ingredient_name: str, user_context) -> bool:
+    if not user_context or not getattr(user_context, "preferred_brands", None):
+        return False
+    product_brand = (variant.get("brand") or "").lower().strip()
+    if not product_brand:
+        return False
+    ingredient_lower = ingredient_name.lower().strip()
+    for keyword in ingredient_lower.split():
+        if keyword in user_context.preferred_brands:
+            if product_brand == user_context.preferred_brands[keyword].lower().strip():
+                return True
+    return False
+
+
+def _make_comparator(ingredient_name: str, user_context):
+    def compare(opt1: Dict, opt2: Dict) -> int:
+        sim1 = opt1.get("semantic_similarity", 0.0)
+        sim2 = opt2.get("semantic_similarity", 0.0)
+        
+        # Tie-breaker rule: if semantic similarity is within 0.05, preferred brand wins
+        if abs(sim1 - sim2) <= 0.05:
+            pref1 = _has_preferred_brand(opt1["variant"], ingredient_name, user_context)
+            pref2 = _has_preferred_brand(opt2["variant"], ingredient_name, user_context)
+            if pref1 and not pref2:
+                return -1
+            if pref2 and not pref1:
+                return 1
+                
+        # Default fallback to total score descending
+        score1 = opt1.get("score", 0.0)
+        score2 = opt2.get("score", 0.0)
+        if score1 > score2:
+            return -1
+        elif score1 < score2:
+            return 1
+        return 0
+    return compare
+
+
+def rank_and_optimize(
+    search_results: Dict,
+    normalized_ingredients: List[Dict],
+    user_context=None,
+    session_type: str = "solo",
+    contributors: List[Dict] = None
+) -> List[Dict]:
     """
     Rank products for each ingredient using multi-factor scoring,
     then optimize the overall basket.
@@ -128,19 +203,52 @@ def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], 
             cart_items.append(_make_unavailable_item(ing))
             continue
 
+        # ─── Pre-compute semantic similarities in batch ─────────────
+        product_similarities = {}
+        unique_product_names = list(set(p.get("name", "") for p in results if p.get("name")))
+        
+        prep_note = ing.get("preparation_note")
+        ingredient_query = f"{ing_name} ({prep_note})" if prep_note else ing_name
+        
+        ef = _get_embedding_fn()
+        if ef and unique_product_names:
+            try:
+                # Batch all comparisons: query + all unique product names
+                texts_to_embed = [ingredient_query] + unique_product_names
+                embeddings = ef(texts_to_embed)
+                
+                query_embedding = embeddings[0]
+                product_embeddings = embeddings[1:]
+                
+                for name, emb in zip(unique_product_names, product_embeddings):
+                    sim = float(_cosine_similarity(query_embedding, emb))
+                    product_similarities[name.lower()] = sim
+            except Exception as e:
+                logger.warning("optimizer.semantic_match_batch_failed", error=str(e)[:100])
+                for name in unique_product_names:
+                    product_similarities[name.lower()] = float(_get_name_similarity_fallback(name, ing_name))
+        else:
+            for name in unique_product_names:
+                product_similarities[name.lower()] = float(_get_name_similarity_fallback(name, ing_name))
+
         # ─── Score and rank all variants across all products ──────
         scored_options = []
         for product in results:
+            product_name = product.get("name", "")
+            sim_score = product_similarities.get(product_name.lower(), 0.0)
+            
             for variant in product.get("variants", []):
                 if not variant.get("in_stock", True):
                     continue
 
                 score, reasons = _score_variant(
-                    product_name=product.get("name", ""),
+                    product_name=product_name,
                     variant=variant,
                     ingredient_name=ing_name,
                     needed_grams=needed_grams,
                     user_context=user_context,
+                    needed_unit=ing.get("unit_display"),
+                    semantic_similarity=sim_score
                 )
 
                 # ── Pantry penalty: aggressively suppress score ───
@@ -159,14 +267,15 @@ def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], 
                     "variant": variant,
                     "score": score,
                     "reasons": reasons,
+                    "semantic_similarity": sim_score
                 })
 
         if not scored_options:
             cart_items.append(_make_unavailable_item(ing))
             continue
 
-        # Sort by score descending
-        scored_options.sort(key=lambda x: x["score"], reverse=True)
+        # Sort by score descending with custom comparator for user preference tie-breaker
+        scored_options.sort(key=cmp_to_key(_make_comparator(ing_name, user_context)))
 
         best = scored_options[0]
         alternatives = scored_options[1:4]  # Top 3 alternatives
@@ -242,32 +351,47 @@ def rank_and_optimize(search_results: Dict, normalized_ingredients: List[Dict], 
                 cart_total=total,
                 avg_waste_pct=round(avg_waste, 1))
 
+    # ─── Fractional Splits (HostelSync protocol) ────────────────────
+    if session_type == "group" and contributors:
+        logger.info("hostelsync.split_started", total_price=total, contributor_count=len(contributors))
+        for c in contributors:
+            fraction = c.get("fraction_owed", 0.0)
+            amount = round(total * fraction, 2)
+            c["amount_owed"] = amount
+            logger.info("hostelsync.split_calculated",
+                        user_id=c.get("user_id"),
+                        fraction=fraction,
+                        amount_owed=amount,
+                        cart_total=total)
+
     return cart_items
 
 
-def _score_variant(product_name: str, variant: Dict, ingredient_name: str, needed_grams, user_context=None) -> tuple:
+def _score_variant(
+    product_name: str,
+    variant: Dict,
+    ingredient_name: str,
+    needed_grams,
+    user_context=None,
+    needed_unit: str = None,
+    semantic_similarity: float = 0.0
+) -> tuple:
     """
     Multi-factor scoring for a product variant.
     Returns (score: float 0-1, reasons: list[str])
-    Now includes user-context-aware brand-preference and go-to-item scoring.
+    Now uses semantic similarity (Cosine Similarity) instead of token overlap.
+    Includes unit discrepancy penalties and user context.
     """
     score = 0.0
     reasons = []
     product_lower = product_name.lower()
     ingredient_lower = ingredient_name.lower()
 
-    # Factor 1: Name relevance (0 - 0.35)
-    ing_words = set(ingredient_lower.split())
-    prod_words = set(product_lower.split())
-    overlap = ing_words & prod_words
-    if ing_words:
-        relevance = len(overlap) / len(ing_words)
-    else:
-        relevance = 0
-    name_score = relevance * 0.35
+    # Factor 1: Semantic relevance (0 - 0.35)
+    name_score = semantic_similarity * 0.35
     score += name_score
-    if relevance >= 0.5:
-        reasons.append(f"Good name match ({int(relevance * 100)}%)")
+    if semantic_similarity >= 0.5:
+        reasons.append(f"Semantic match ({int(semantic_similarity * 100)}%)")
 
     # Factor 2: Pack-size efficiency (0 - 0.25)
     pack_grams = variant.get("pack_grams", 0)
@@ -308,10 +432,9 @@ def _score_variant(product_name: str, variant: Dict, ingredient_name: str, neede
         score += 0.1
         reasons.append("In stock")
 
-    # Factor 5: User brand preference (0 - 0.1) — NEW INTELLIGENCE
+    # Factor 5: User brand preference (0 - 0.1)
     if user_context:
         product_brand = variant.get("brand", "") or ""
-        # Check if any keyword in ingredient matches a preferred brand
         for keyword in ingredient_lower.split():
             if keyword in user_context.preferred_brands:
                 if product_brand.lower() == user_context.preferred_brands[keyword].lower():
@@ -325,7 +448,13 @@ def _score_variant(product_name: str, variant: Dict, ingredient_name: str, neede
             score += 0.05
             reasons.append("⭐ Your go-to item")
 
-    return round(score, 3), reasons
+    # Factor 6: Unit Discrepancy Penalty (-0.5 if applicable)
+    if needed_unit and needed_unit in ["pinch", "pinches", "tsp", "teaspoon", "teaspoons"]:
+        if pack_grams >= 1000:
+            score += -0.5
+            reasons.append("⚠️ Bulk unit mismatch: low-volume pinch/tsp vs 1kg+ bulk bag (-0.5)")
+
+    return round(float(score), 3), reasons
 
 
 def _make_unavailable_item(ing: Dict) -> Dict:

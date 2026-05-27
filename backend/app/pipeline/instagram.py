@@ -227,26 +227,24 @@ async def _scrape_instaloader_fallback(url: str, shortcode: str = None) -> Optio
     Instaloader is the most robust option but requires session or no-auth mode.
     """
     try:
-        import tempfile
-        import os
-        
+        import instaloader
         from instaloader import Post
         
-        with tempfile.TemporaryDirectory() as tmpdir:
-            post = Post.from_shortcode(tmpdir, shortcode)
-            
-            parts = []
-            
-            if post.caption:
-                parts.append(post.caption)
-            
-            if post.title:
-                parts.append(post.title)
-            
-            return "\n\n".join(parts) if parts else None
+        L = instaloader.Instaloader()
+        post = Post.from_shortcode(L.context, shortcode)
+        
+        parts = []
+        
+        if post.caption:
+            parts.append(post.caption)
+        
+        if post.title:
+            parts.append(post.title)
+        
+        return "\n\n".join(parts) if parts else None
             
     except ImportError:
-        logger.info("instagram.installer_not_available", "Instaloader not installed")
+        logger.info("instagram.instaloader_not_available", message="Instaloader not installed")
         return None
     except Exception as e:
         logger.warning("instagram.instaloader_error", error=str(e)[:100])

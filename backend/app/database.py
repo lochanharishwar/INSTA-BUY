@@ -497,7 +497,7 @@ class InventoryVectorStore:
         if results and results["ids"] and results["ids"][0]:
             for i, doc_id in enumerate(results["ids"][0]):
                 # ChromaDB cosine distance → similarity = 1 - distance
-                distance = results["distances"][0][i]
+                distance = float(results["distances"][0][i])
                 similarity = 1.0 - distance
 
                 if similarity < similarity_threshold:
@@ -506,12 +506,12 @@ class InventoryVectorStore:
                 meta = results["metadatas"][0][i]
                 matches.append({
                     "name": results["documents"][0][i],
-                    "similarity": round(similarity, 3),
+                    "similarity": round(float(similarity), 3),
                     "brand": meta.get("brand", ""),
-                    "decay_ratio": meta.get("decay_ratio", 0.0),
-                    "days_since_purchase": meta.get("days_since_purchase", 0.0),
-                    "shelf_life_days": meta.get("shelf_life_days", 30),
-                    "purchased_epoch": meta.get("purchased_epoch", 0.0),
+                    "decay_ratio": round(float(meta.get("decay_ratio", 0.0)), 3),
+                    "days_since_purchase": round(float(meta.get("days_since_purchase", 0.0)), 1),
+                    "shelf_life_days": int(meta.get("shelf_life_days", 30)),
+                    "purchased_epoch": float(meta.get("purchased_epoch", 0.0)),
                 })
 
         return matches

@@ -122,6 +122,8 @@ def normalize_ingredients(recipe_ingredients: List[Any], serving_size: int) -> L
             "quantity_display": f"{q} {unit}",
             "unit_display": unit,
             "ingredient_name": ing.canonical_name,
+            "preparation_note": getattr(ing, "preparation_note", None),
+            "raw_name": getattr(ing, "raw_name", ""),
             "is_optional": getattr(ing, "is_optional", False),
             "category": getattr(ing, "category", "other"),
             "matched_in_db": match is not None,

@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { useStore } from '../../lib/store'
 import { api } from '../../lib/api'
-import { Youtube, Globe, Type, Sparkles, ArrowRight, Link2, Instagram, Brain, ShoppingCart, Search, Shield, Zap, Moon, Sun, ChefHat, Share2, Copy, Check } from 'lucide-react'
+import { Youtube, Globe, Type, ArrowRight, Instagram, ChefHat } from 'lucide-react'
 
 export default function RecipeInput() {
   const [url, setUrl] = useState('')
@@ -10,58 +10,7 @@ export default function RecipeInput() {
   const [auth, setAuth] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
-  const [darkMode, setDarkMode] = useState(false)
-  const [copied, setCopied] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setDarkMode(true)
-      document.documentElement.classList.add('dark')
-    }
-  }, [])
-
-  const toggleDarkMode = () => {
-    setDarkMode(!darkMode)
-    document.documentElement.classList.toggle('dark')
-  }
-
-  const handleShare = async () => {
-    const shareData = {
-      title: 'InstaChef AI - Cooking Commerce Agent',
-      text: 'Turn any recipe video, blog, or text into a Swiggy Instamart grocery order in seconds!',
-      url: window.location.href
-    }
-
-    if (navigator.share && navigator.canShare?.(shareData)) {
-      try {
-        await navigator.share(shareData)
-      } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
-          await copyToClipboard()
-        }
-      }
-    } else {
-      await copyToClipboard()
-    }
-  }
-
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.href)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      const textarea = document.createElement('textarea')
-      textarea.value = window.location.href
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      document.body.removeChild(textarea)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }
 
   const handleConnect = async () => {
     setIsConnecting(true)
@@ -70,9 +19,7 @@ export default function RecipeInput() {
       if (res.url.includes('mock_auth=success')) {
         setIsConnecting(false)
         setIsConnected(true)
-        setTimeout(() => {
-          setAuth(true)
-        }, 1500)
+        setTimeout(() => { setAuth(true) }, 1200)
       } else {
         window.location.href = res.url
       }
@@ -110,211 +57,154 @@ export default function RecipeInput() {
 
   if (!auth) {
     return (
-      <div className="flex flex-col items-center justify-center mt-16 animate-fade-in">
-        <div className="swiggy-glass p-10 text-center max-w-md relative overflow-hidden group">
-          <div className="absolute inset-0 bg-gradient-to-br from-swiggy-500/5 via-transparent to-orange-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-swiggy-500 via-orange-400 to-swiggy-600" />
-          
-          <div className="relative">
-            <div className="w-16 h-16 bg-gradient-to-br from-swiggy-50 to-orange-100 dark:from-swiggy-500/20 dark:to-orange-500/20 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg group-hover:scale-110 transition-transform duration-300">
-              <Link2 className="w-8 h-8 text-swiggy-500" />
-            </div>
-            <h2 className="text-2xl font-bold text-brand-dark dark:text-white mb-2">Connect Instamart</h2>
-            <p className="text-brand-subtle dark:text-dark-subtle text-sm mb-8 leading-relaxed">
-              Link your Swiggy account so we can search products, build your cart, and place orders on Instamart.
-            </p>
-            <button
-              onClick={handleConnect}
-              disabled={isConnecting || isConnected}
-              className={`w-full py-4 text-base rounded-2xl font-semibold transition-all duration-300 flex items-center justify-center gap-3 ${
-                isConnected
-                  ? 'bg-green-500 text-white shadow-lg shadow-green-500/30'
-                  : 'swiggy-btn-primary'
-              }`}
-            >
-              {isConnecting ? (
-                <>
-                  <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Connecting...
-                </>
-              ) : isConnected ? (
-                <>
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                  </svg>
-                  Connected Successfully
-                </>
-              ) : (
-                <>
-                  Connect Swiggy Account
-                  <ArrowRight className="w-5 h-5" />
-                </>
-              )}
-            </button>
+      <div className="flex flex-col items-center justify-center mt-24 animate-fade-in">
+        <div className="swiggy-card p-10 text-center max-w-sm">
+          <div className="w-12 h-12 bg-sand-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
+            <ChefHat className="w-6 h-6 text-[var(--text-secondary)]" />
           </div>
+          <h2 className="text-xl font-semibold text-[var(--text-primary)] mb-2">Connect Instamart</h2>
+          <p className="text-sm text-[var(--text-muted)] mb-8 leading-relaxed">
+            Link your account so we can add items to your Swiggy cart and track delivery.
+          </p>
+          <button
+            onClick={handleConnect}
+            disabled={isConnecting || isConnected}
+            className={`w-full py-3.5 text-base rounded-2xl font-medium transition-all duration-300 flex items-center justify-center gap-2 ${
+              isConnected
+                ? 'bg-green-500 text-white'
+                : 'swiggy-btn-primary'
+            }`}
+          >
+            {isConnecting ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Connecting...
+              </>
+            ) : isConnected ? (
+              <>
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+                Connected
+              </>
+            ) : (
+              <>
+                Connect Account
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="max-w-3xl mx-auto mt-6 animate-fade-in">
-      {/* Header Section */}
-      <div className="text-center mb-8 relative">
-        <div className="absolute top-0 right-0 flex items-center gap-2">
-          <button
-            onClick={handleShare}
-            className="p-2 rounded-xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-all hover:scale-105 flex items-center gap-1.5 text-xs font-medium text-brand-subtle dark:text-dark-subtle"
-            title="Share InstaChef AI"
-          >
-            {copied ? <Check className="w-4 h-4 text-green-500" /> : <Share2 className="w-4 h-4" />}
-            {copied ? 'Copied!' : 'Share'}
-          </button>
-          <button
-            onClick={toggleDarkMode}
-            className="p-2 rounded-xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-all hover:scale-105"
-          >
-            {darkMode ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-500" />}
-          </button>
-        </div>
-        
-        <div className="inline-flex items-center gap-2 bg-gradient-to-r from-swiggy-50 to-orange-50 dark:from-swiggy-500/10 dark:to-orange-500/10 text-swiggy-700 px-4 py-2 rounded-full text-sm font-medium mb-5 border border-swiggy-100/60 dark:border-swiggy-500/20 shadow-sm animate-fade-in-up">
-          <Sparkles className="w-4 h-4 animate-pulse" />
-          10-Node Agentic Pipeline
-        </div>
-        
-        <h2 className="text-5xl font-bold text-brand-dark dark:text-white mb-4 leading-tight animate-fade-in-up" style={{ animationDelay: '100ms' }}>
-          What are we<br/>
-          <span className="gradient-text">cooking today?</span>
+    <div className="max-w-2xl mx-auto mt-8 animate-fade-in">
+      {/* Hero */}
+      <div className="text-center mb-12">
+        <h2 className="font-outfit text-5xl md:text-6xl font-bold text-[var(--text-primary)] mb-5 tracking-tight leading-tight">
+          Turn Inspiration<br />
+          <span className="text-[var(--accent)] drop-shadow-sm">Into Ingredients.</span>
         </h2>
-        <p className="text-brand-subtle dark:text-dark-subtle text-lg animate-fade-in-up" style={{ animationDelay: '200ms' }}>
-          Paste any recipe source — our AI pipeline extracts, understands,<br className="hidden sm:block" />
-          normalizes, and builds your Instamart cart automatically.
+        <p className="text-[var(--text-muted)] text-base md:text-lg max-w-md mx-auto leading-relaxed font-medium">
+          Paste a recipe video, reel, or blog. We'll find every item on Instamart in seconds.
         </p>
       </div>
 
-      {/* Input Card with Glassmorphism */}
-      <div className="swiggy-glass p-6 relative overflow-hidden animate-fade-in-up" style={{ animationDelay: '300ms' }}>
-        <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-swiggy/40 to-transparent" />
-        <div className="absolute -top-20 -right-20 w-40 h-40 bg-swiggy-500/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-20 -left-20 w-40 h-40 bg-orange-500/10 rounded-full blur-3xl" />
-        
-        <form onSubmit={handleSubmit} className="relative space-y-5">
-          <div className="relative group">
+      {/* Input */}
+      <div className="swiggy-card p-2 shadow-float hover:shadow-glow-swiggy transition-shadow duration-500 rounded-2xl relative bg-white/60 backdrop-blur-xl border border-[var(--border-color)]">
+        <div className="absolute inset-0 bg-gradient-to-r from-[var(--accent-subtle)] to-transparent rounded-2xl pointer-events-none opacity-50" />
+        <form onSubmit={handleSubmit} className="relative z-10">
+          <div className="relative flex items-center gap-2 bg-[var(--bg-card)] rounded-xl px-2 py-1 shadow-inner">
             <input
               ref={inputRef}
               type="text"
               id="recipe-input"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste a YouTube URL, Instagram Reel, blog link, or type a recipe..."
-              className="swiggy-input text-lg"
+              placeholder="Paste YouTube, Instagram, or blog link..."
+              className="flex-1 py-4 px-4 bg-transparent text-lg text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none font-medium"
             />
             {inputType && (
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 animate-scale-in">
-                {inputType === 'youtube' && <Youtube className="w-6 h-6 text-red-500" />}
-                {inputType === 'instagram' && <Instagram className="w-6 h-6 text-pink-500" />}
-                {inputType === 'blog' && <Globe className="w-6 h-6 text-blue-500" />}
-                {inputType === 'text' && <Type className="w-6 h-6 text-brand-subtle" />}
+              <div className="pr-2 flex items-center animate-scale-in">
+                {inputType === 'youtube' && <Youtube className="w-6 h-6 text-red-500 drop-shadow-sm" />}
+                {inputType === 'instagram' && <Instagram className="w-6 h-6 text-pink-500 drop-shadow-sm" />}
+                {inputType === 'blog' && <Globe className="w-6 h-6 text-blue-500 drop-shadow-sm" />}
+                {inputType === 'text' && <Type className="w-6 h-6 text-[var(--text-muted)] drop-shadow-sm" />}
               </div>
             )}
-          </div>
-
-          <div className="flex flex-wrap gap-2 items-center">
-            <span className="text-xs text-brand-muted dark:text-dark-muted">Try:</span>
             <button
-              type="button"
-              onClick={() => setUrl('https://www.youtube.com/watch?v=9WXinXCkJoI')}
-              className="text-xs text-swiggy hover:text-swiggy-700 underline underline-offset-2 transition"
+              type="submit"
+              id="cook-this-btn"
+              disabled={loading || !url.trim()}
+              className="swiggy-btn-primary px-8 py-4 text-base flex items-center gap-2 shrink-0 shadow-glow-swiggy group"
             >
-              Butter Chicken (YouTube)
-            </button>
-            <span className="text-xs text-brand-muted dark:text-dark-muted">•</span>
-            <button
-              type="button"
-              onClick={() => setUrl('https://www.instagram.com/reel/DOvzTywjPGN/')}
-              className="text-xs text-swiggy hover:text-swiggy-700 underline underline-offset-2 transition"
-            >
-              Paneer Tikka (Reel)
-            </button>
-            <span className="text-xs text-brand-muted dark:text-dark-muted">•</span>
-            <button
-              type="button"
-              onClick={() => setUrl('Make dal tadka for 4 people. Need 200g toor dal, 2 tomatoes, 1 onion, 1 tsp cumin, 1 tsp turmeric, 1 tbsp ghee, salt to taste.')}
-              className="text-xs text-swiggy hover:text-swiggy-700 underline underline-offset-2 transition"
-            >
-              Dal Tadka (text)
+              {loading ? (
+                <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  <span className="font-bold tracking-wide">Gather</span>
+                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                </>
+              )}
             </button>
           </div>
-
-          <button
-            type="submit"
-            id="cook-this-btn"
-            disabled={loading || !url.trim()}
-            className="swiggy-btn-primary w-full py-5 text-lg flex items-center justify-center gap-3 group relative overflow-hidden"
-          >
-            <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
-            {loading ? (
-              <>
-                <span className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin relative" />
-                <span className="font-semibold">Processing...</span>
-              </>
-            ) : (
-              <>
-                <ChefHat className="w-6 h-6 group-hover:animate-bounce" />
-                <span className="font-semibold">Cook This</span>
-                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </>
-            )}
-          </button>
         </form>
-      </div>
 
-      {/* Pipeline Architecture Showcase */}
-      <div className="mt-12 animate-fade-in-up" style={{ animationDelay: '500ms' }}>
-        <p className="text-center text-[11px] text-brand-muted dark:text-dark-muted uppercase tracking-widest font-medium mb-5">What happens when you press Cook This</p>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {[
-            { icon: <Brain className="w-5 h-5" />, label: 'Classify', desc: '4 input types', gradient: 'from-blue-500 to-blue-600' },
-            { icon: <Zap className="w-5 h-5" />, label: 'Extract', desc: '4-tier fallback', gradient: 'from-amber-500 to-orange-500' },
-            { icon: <Sparkles className="w-5 h-5" />, label: 'Understand', desc: 'LLM parsing', gradient: 'from-purple-500 to-pink-500' },
-            { icon: <Search className="w-5 h-5" />, label: 'Search', desc: '8× parallel', gradient: 'from-emerald-500 to-teal-500' },
-            { icon: <Shield className="w-5 h-5" />, label: 'Validate', desc: '2 gate checks', gradient: 'from-indigo-500 to-violet-500' },
-          ].map((step, i) => (
-            <div 
-              key={step.label} 
-              className="swiggy-glass p-4 text-center hover:scale-105 hover:shadow-lg transition-all duration-300 cursor-default group"
-              style={{ animationDelay: `${600 + i * 100}ms` }}
-            >
-              <div className={`w-12 h-12 bg-gradient-to-br ${step.gradient} rounded-2xl flex items-center justify-center mx-auto mb-3 text-white shadow-lg group-hover:scale-110 transition-transform duration-300`}>
-                {step.icon}
-              </div>
-              <p className="text-sm font-bold text-brand-dark dark:text-white">{step.label}</p>
-              <p className="text-[10px] text-brand-muted dark:text-dark-muted mt-1">{step.desc}</p>
-            </div>
-          ))}
+        {/* Quick links */}
+        <div className="flex flex-wrap items-center gap-2 mt-3 px-4 pb-3">
+          <span className="text-xs text-[var(--text-muted)]">Try:</span>
+          <button
+            type="button"
+            onClick={() => setUrl('https://www.youtube.com/watch?v=9WXinXCkJoI')}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+          >
+            Butter Chicken
+          </button>
+          <span className="text-xs text-[var(--text-muted)]">•</span>
+          <button
+            type="button"
+            onClick={() => setUrl('https://www.instagram.com/reel/DOvzTywjPGN/')}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+          >
+            Paneer Tikka
+          </button>
+          <span className="text-xs text-[var(--text-muted)]">•</span>
+          <button
+            type="button"
+            onClick={() => setUrl('Make dal tadka for 4 people. Need 200g toor dal, 2 tomatoes, 1 onion, 1 tsp cumin, 1 tsp turmeric, 1 tbsp ghee, salt to taste.')}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+          >
+            Dal Tadka
+          </button>
         </div>
       </div>
 
-      {/* Feature Pills */}
-      <div className="flex flex-wrap justify-center gap-3 mt-10 animate-fade-in-up" style={{ animationDelay: '700ms' }}>
-        {[
-          { icon: '🎥', label: 'YouTube' },
-          { icon: '📸', label: 'Instagram' },
-          { icon: '📝', label: 'Blogs' },
-          { icon: '✍️', label: 'Text' },
-          { icon: '🧠', label: 'Pantry AI' },
-          { icon: '📊', label: 'Waste Opt.' },
-          { icon: '⭐', label: 'Personalized' },
-        ].map(f => (
-          <div 
-            key={f.label} 
-            className="flex items-center gap-2 bg-white/60 dark:bg-dark-card/60 backdrop-blur-sm text-brand-subtle dark:text-dark-subtle text-xs px-4 py-2 rounded-full border border-brand-border/40 dark:border-dark-border shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5"
-          >
-            <span className="text-base">{f.icon}</span>
-            <span className="font-medium">{f.label}</span>
-          </div>
-        ))}
+      {/* How it works */}
+      <div className="mt-16">
+        <p className="text-center text-xs text-[var(--text-muted)] uppercase tracking-wider font-medium mb-6">
+          How it works
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          {[
+            { label: 'Read', desc: 'Recipe from any source' },
+            { label: 'Find', desc: 'Ingredients on Instamart' },
+            { label: 'Pick', desc: 'Best sizes for less waste' },
+            { label: 'Order', desc: 'Delivered to your door' },
+          ].map((step, i) => (
+            <div
+              key={step.label}
+              className="text-center p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:shadow-card-hover transition-shadow duration-300"
+            >
+              <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-sand-100 text-[var(--text-secondary)] text-sm font-semibold mb-3">
+                {i + 1}
+              </span>
+              <p className="text-sm font-semibold text-[var(--text-primary)] mb-1">{step.label}</p>
+              <p className="text-xs text-[var(--text-muted)]">{step.desc}</p>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )

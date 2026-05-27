@@ -11,7 +11,9 @@ It has:
 - Failure recovery with graceful degradation
 """
 from langgraph.graph import StateGraph, END
-from typing import Dict, Any, TypedDict, Optional, List
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.errors import GraphInterrupt
+from typing import Dict, Any, TypedDict, Optional, List, Literal
 from app.pipeline.classifier import classify_input
 from app.pipeline.extractor import extract_content, has_pending_transcription, get_video_id
 from app.pipeline.understander import understand_recipe
@@ -34,6 +36,8 @@ logger = structlog.get_logger()
 
 class GraphState(TypedDict):
     session_id: str
+    session_type: Literal["solo", "group"]
+    contributors: List[Dict[str, Any]]
     raw_input: str
     input_type: str
     raw_content: str
@@ -80,6 +84,20 @@ async def classify_node(state: GraphState) -> GraphState:
     input_type = classify_input(state["raw_input"])
     duration = int((time.time() - t0) * 1000)
 
+    # ── Text shortcut: skip extraction for raw text ──
+    updates: dict = {
+        "input_type": input_type,
+        "pipeline_trace": state.get("pipeline_trace", []) + [
+            _trace_entry("classify", "done", f"Detected: {input_type}", duration)
+        ],
+        "started_at": time.time(),
+    }
+    if input_type == "text":
+        updates["raw_content"] = state["raw_input"]
+        updates["pipeline_trace"] = state.get("pipeline_trace", []) + [
+            _trace_entry("classify", "done", f"Detected: {input_type} (raw text, skip extract)", duration)
+        ]
+
     logger.info("node.classify", session_id=state["session_id"],
                 input_type=input_type, duration_ms=duration)
 
@@ -88,14 +106,7 @@ async def classify_node(state: GraphState) -> GraphState:
         "input_type": input_type, "duration_ms": duration
     })
 
-    trace = state.get("pipeline_trace", []) + [
-        _trace_entry("classify", "done", f"Detected: {input_type}", duration)
-    ]
-    return {
-        "input_type": input_type,
-        "pipeline_trace": trace,
-        "started_at": time.time(),
-    }
+    return updates
 
 
 # ─── Node: Build User Context (Intelligence Layer) ───────────────────
@@ -142,9 +153,24 @@ async def user_context_node(state: GraphState) -> GraphState:
 # ─── Node: Extract Content ───────────────────────────────────────────
 
 async def extract_node(state: GraphState) -> GraphState:
+    # ── Text shortcut: raw text needs no extraction ──
+    if state.get("input_type") == "text":
+        await emit_sse(state["session_id"], {
+            "stage": "extract", "status": "done",
+            "source": "raw_text", "word_count": len(state["raw_input"].split()), "duration_ms": 0
+        })
+        trace = state.get("pipeline_trace", []) + [
+            _trace_entry("extract", "done", "Raw text — no extraction needed", 0)
+        ]
+        return {"raw_content": state["raw_input"], "pipeline_trace": trace}
+
     t0 = time.time()
     try:
-        content, source = await extract_content(state["raw_input"], state["input_type"])
+        # Fast timeout guard for slow video/blog extraction
+        content, source = await asyncio.wait_for(
+            extract_content(state["raw_input"], state["input_type"]),
+            timeout=30.0
+        )
         duration = int((time.time() - t0) * 1000)
         word_count = len(content.split())
 
@@ -157,9 +183,6 @@ async def extract_node(state: GraphState) -> GraphState:
         })
 
         # ── "202 Accepted" pattern: background audio enrichment ──
-        # If we got a metadata_fallback and there's a background
-        # transcription running, notify the frontend so it can
-        # show a secondary progress indicator.
         if source == "metadata_fallback" and state.get("input_type") == "youtube":
             video_id = get_video_id(state["raw_input"])
             if video_id and has_pending_transcription(video_id):
@@ -179,6 +202,17 @@ async def extract_node(state: GraphState) -> GraphState:
             _trace_entry("extract", "done", f"{word_count} words from {source}", duration)
         ]
         return {"raw_content": content, "pipeline_trace": trace}
+
+    except asyncio.TimeoutError:
+        logger.warning("node.extract.timeout", session_id=state["session_id"], url=state["raw_input"][:80])
+        trace = state.get("pipeline_trace", []) + [
+            _trace_entry("extract", "failed", "Extraction timed out after 30s", 30000)
+        ]
+        await emit_sse(state["session_id"], {
+            "stage": "extract", "status": "failed",
+            "message": "Could not retrieve recipe in time. Try pasting the text directly."
+        })
+        return {"error": "Extraction timed out. Try pasting the recipe text directly.", "pipeline_trace": trace}
 
     except Exception as e:
         duration = int((time.time() - t0) * 1000)
@@ -384,7 +418,14 @@ async def search_instamart_node(state: GraphState) -> GraphState:
 async def optimize_node(state: GraphState) -> GraphState:
     t0 = time.time()
     ctx = state.get("user_context") or UserContext()
-    cart_items = rank_and_optimize(state["search_results"], state["normalized_ingredients"], ctx)
+    contributors_copy = [dict(c) for c in state.get("contributors", [])]
+    cart_items = rank_and_optimize(
+        state["search_results"],
+        state["normalized_ingredients"],
+        ctx,
+        session_type=state.get("session_type", "solo"),
+        contributors=contributors_copy
+    )
 
     available = [i for i in cart_items if i.get("spin_id")]
     pantry = [i for i in cart_items if i.get("pantry_likely") and not i.get("spin_id")]
@@ -433,6 +474,7 @@ async def optimize_node(state: GraphState) -> GraphState:
         "ranked_products": cart_items,
         "pipeline_trace": trace,
         "pipeline_metrics": metrics,
+        "contributors": contributors_copy,
     }
 
 
@@ -472,6 +514,26 @@ def route_after_extract(state: GraphState) -> str:
     if state.get("error"):
         return "abort"
     return "understand"
+
+
+# ─── Conditional Router: Post-User Context ──────────────────────────
+
+def route_after_user_context(state: GraphState) -> str:
+    """Route after user context: if text input, skip to understand."""
+    if state.get("error"):
+        return "abort"
+    if state.get("input_type") == "text":
+        return "understand"
+    return "extract"
+
+
+# ─── Conditional Router: Post-Classify ─────────────────────────────
+
+def route_after_classify(state: GraphState) -> str:
+    """Route after classify: always to user_context, extract skipped by downstream router."""
+    if state.get("error"):
+        return "abort"
+    return "user_context"
 
 
 # ─── Conditional Router: Post-Understanding ──────────────────────────
@@ -519,7 +581,23 @@ async def abort_node(state: GraphState) -> GraphState:
 
 async def build_cart_node(state: GraphState) -> GraphState:
     if not state.get("user_approved"):
-        return {}
+        raise GraphInterrupt("Waiting for primary user approval")
+
+    # Synchronization barrier (HostelSync protocol)
+    session_type = state.get("session_type", "solo")
+    contributors = state.get("contributors", [])
+    
+    if session_type == "group" and contributors:
+        not_approved = [c.get("user_id") for c in contributors if not c.get("approval_status", False)]
+        if not_approved:
+            logger.info("node.build_cart.waiting_approvals", session_id=state["session_id"], not_approved=not_approved)
+            await emit_sse(state["session_id"], {
+                "stage": "waiting_approvals",
+                "status": "pending",
+                "not_approved": not_approved,
+                "contributors": contributors
+            })
+            raise GraphInterrupt(f"Waiting for approvals from roommates: {', '.join(not_approved)}")
 
     manager = CartManager(state["session_id"])
     items_to_add = [
@@ -542,7 +620,7 @@ async def build_cart_node(state: GraphState) -> GraphState:
 
 async def checkout_node(state: GraphState) -> GraphState:
     manager = CartManager(state["session_id"])
-    order_id = await manager.safe_checkout()
+    order_id = await manager.safe_checkout(contributors=state.get("contributors"))
 
     logger.info("node.checkout", session_id=state["session_id"],
                  order_id=order_id)
@@ -552,6 +630,10 @@ async def checkout_node(state: GraphState) -> GraphState:
         "order_id": order_id, "estimated_delivery_minutes": 15
     })
     return {"order_id": order_id}
+
+
+# Global checkpointer instance to persist states across graph compilation instances
+_memory_saver = MemorySaver()
 
 
 # ─── Build the Agentic Graph ─────────────────────────────────────────
@@ -569,16 +651,24 @@ def build_graph():
     workflow.add_node("search", search_instamart_node)
     workflow.add_node("optimize", optimize_node)
     workflow.add_node("validate_cart", validate_cart_node)
+    workflow.add_node("build_cart", build_cart_node)
+    workflow.add_node("checkout", checkout_node)
     workflow.add_node("abort", abort_node)
 
     # Entry point
     workflow.set_entry_point("classify")
 
-    # Parallel: classify → user_context (non-blocking) + extract
+    # After classify -> user_context always runs
     workflow.add_edge("classify", "user_context")
-    workflow.add_edge("user_context", "extract")
 
-    # Conditional: after extract → understand or abort
+    # After user_context: for text input, skip to understand; for URLs, go to extract
+    workflow.add_conditional_edges("user_context", route_after_user_context, {
+        "understand": "understand",
+        "extract": "extract",
+        "abort": "abort",
+    })
+
+    # After extract -> understand or abort
     workflow.add_conditional_edges("extract", route_after_extract, {
         "understand": "understand",
         "abort": "abort",
@@ -602,9 +692,11 @@ def build_graph():
     workflow.add_edge("normalize", "search")
     workflow.add_edge("search", "optimize")
     workflow.add_edge("optimize", "validate_cart")
+    workflow.add_edge("validate_cart", "build_cart")
+    workflow.add_edge("build_cart", "checkout")
 
     # Terminal edges
-    workflow.add_edge("validate_cart", END)
+    workflow.add_edge("checkout", END)
     workflow.add_edge("abort", END)
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=_memory_saver, interrupt_before=["build_cart"])
