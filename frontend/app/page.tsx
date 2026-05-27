@@ -1,6 +1,6 @@
 "use client"
 import { useEffect, useState } from 'react'
-import { useStore } from '../lib/store'
+import { useStore } from './lib/store'
 import RecipeInput from './components/RecipeInput'
 import PipelineProgress from './components/PipelineProgress'
 import CartReview from './components/CartReview'

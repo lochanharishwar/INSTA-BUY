@@ -82,3 +82,10 @@ deployment_guide.md
 
 # ─── Chrome extension skeleton (not part of core app) ─────────────────
 extension/
+
+# ─── Hackathon Reports & Docs ────────────────────────────────────────
+/reports/
+*.pdf
+/docs/build/
+.env.*
+

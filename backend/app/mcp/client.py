@@ -62,7 +62,7 @@ class MCPClient:
             logger.debug("mcp.mock_call", tool=name, request_id=request_id)
             return result
 
-        token = self.auth.get_valid_token()
+        token = await self.auth.get_valid_token()
         if not token:
             raise ValueError("No valid auth token")
 

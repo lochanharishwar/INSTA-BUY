@@ -67,9 +67,9 @@ def health():
     return {"status": "ok"}
 
 @app.get("/auth/status")
-def auth_status(session_id: str):
+async def auth_status(session_id: str):
     auth = MCPAuth(session_id)
-    return {"authenticated": auth.has_valid_session()}
+    return {"authenticated": await auth.has_valid_session()}
 
 @app.get("/auth/login")
 def auth_login(session_id: str):

@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import secrets
+import time
 from typing import Dict, Optional
 import httpx
 from redis import Redis
@@ -62,25 +63,57 @@ class MCPAuth:
                 return True
             return False
 
-    def get_valid_token(self) -> Optional[str]:
+    async def refresh_access_token(self, refresh_token: str) -> bool:
+        if settings.MOCK_MCP:
+            return True
+            
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                settings.SWIGGY_OAUTH_TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": settings.SWIGGY_CLIENT_ID,
+                    "client_secret": settings.SWIGGY_CLIENT_SECRET
+                }
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                self._save_tokens(data["access_token"], data["refresh_token"], data.get("expires_in", 86400))
+                return True
+            return False
+
+    async def get_valid_token(self) -> Optional[str]:
         if settings.MOCK_MCP:
             return "mock_token"
             
         tokens = self._get_tokens()
         if not tokens:
             return None
+            
+        # Check expiry and refresh if expires in less than 5 minutes (300 seconds)
+        if tokens.get("expires_at", 0) - time.time() < 300:
+            refresh_token = tokens.get("refresh_token")
+            if refresh_token:
+                success = await self.refresh_access_token(refresh_token)
+                if success:
+                    tokens = self._get_tokens()
+                    return tokens.get("access_token") if tokens else None
+                    
         return tokens.get("access_token")
 
     def _save_tokens(self, access: str, refresh: str, expires_in: int):
         data = {
             "access_token": access,
-            "refresh_token": refresh
+            "refresh_token": refresh,
+            "expires_at": time.time() + expires_in
         }
-        redis_client.setex(f"tokens:{self.session_id}", 86400, json.dumps(data))
+        redis_client.setex(f"tokens:{self.session_id}", 86400 * 30, json.dumps(data))
 
     def _get_tokens(self) -> Optional[Dict[str, str]]:
         data = redis_client.get(f"tokens:{self.session_id}")
         return json.loads(data) if data else None
         
-    def has_valid_session(self) -> bool:
-        return self.get_valid_token() is not None
+    async def has_valid_session(self) -> bool:
+        token = await self.get_valid_token()
+        return token is not None
