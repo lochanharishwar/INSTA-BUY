@@ -73,10 +73,8 @@ module.exports = {
         outfit: ['var(--font-outfit)', 'sans-serif'],
       },
       boxShadow: {
-        'card': '0 2px 8px rgba(28, 25, 23, 0.05), 0 1px 2px rgba(28, 25, 23, 0.03)',
-        'card-hover': '0 8px 24px rgba(28, 25, 23, 0.08), 0 2px 8px rgba(28, 25, 23, 0.04)',
-        'float': '0 12px 32px rgba(28, 25, 23, 0.1)',
-        'glow-swiggy': '0 0 24px rgba(252, 128, 25, 0.3)',
+        'card': '0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02)',
+        'card-hover': '0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04)',
       },
       animation: {
         'fade-in': 'fadeIn 0.5s ease-out forwards',

@@ -18,7 +18,7 @@ const DOT: Record<string, string> = {
 }
 
 export default function CartReview() {
-  const { session_id, cart_proposal, setScreen } = useStore()
+  const { session_id, cart_proposal, setScreen, session_type, contributors, setContributors } = useStore()
   const [items, setItems] = useState(cart_proposal?.cart_items || [])
   const [loading, setLoading] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
@@ -97,20 +97,20 @@ export default function CartReview() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="h-[calc(100vh-140px)] flex flex-col lg:flex-row gap-6">
         {/* Left Column */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="flex-1 flex flex-col space-y-4 overflow-hidden">
           {/* Metrics */}
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-4 gap-3 shrink-0">
             {[
               { label: 'Items', value: String(buyableItems.length) },
               { label: 'Total', value: `₹${total}` },
-              { label: 'Waste', value: `${avgWaste.toFixed(0)}%`, color: avgWaste > 30 ? 'text-amber-600' : 'text-green-600' },
-              { label: 'In Pantry', value: String(pantryItems.length), color: 'text-indigo-600' },
+              { label: 'Waste', value: `${avgWaste.toFixed(0)}%`, color: avgWaste > 30 ? 'text-amber-500' : 'text-green-500' },
+              { label: 'In Pantry', value: String(pantryItems.length), color: 'text-indigo-500' },
             ].map(m => (
-              <div key={m.label} className="swiggy-card p-3.5 text-center">
-                <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-medium">{m.label}</p>
-                <p className={`text-xl font-semibold mt-0.5 ${m.color || 'text-[var(--text-primary)]'}`}>{m.value}</p>
+              <div key={m.label} className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-3 text-center shadow-sm">
+                <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-bold">{m.label}</p>
+                <p className={`text-lg font-extrabold mt-1 ${m.color || 'text-[var(--text-primary)]'}`}>{m.value}</p>
               </div>
             ))}
           </div>
@@ -163,8 +163,8 @@ export default function CartReview() {
             </div>
           )}
 
-          {/* Cart items */}
-          <div className="space-y-3 mt-2">
+          {/* Cart items - Scrollable Area */}
+          <div className="flex-1 overflow-y-auto space-y-3 pr-2 pb-10">
             {buyableItems.map((item: any, i: number) => {
               const badge = STATUS[item.confidence] || STATUS.medium;
               const dot = DOT[item.confidence] || 'bg-gray-400';
@@ -272,9 +272,8 @@ export default function CartReview() {
         </div>
 
         {/* Right Column: Checkout */}
-        <div className="lg:col-span-1">
-          <div className="sticky top-20 space-y-4">
-            <div className="swiggy-card p-5">
+        <div className="w-full lg:w-80 shrink-0">
+          <div className="sticky top-0 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 shadow-sm">
               <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-4">Order Summary</h3>
               <div className="space-y-2 mb-4 text-sm">
                 <div className="flex justify-between text-[var(--text-muted)]">
@@ -291,19 +290,48 @@ export default function CartReview() {
                 </div>
               </div>
 
+              {session_type === 'group' && contributors.length > 0 && (
+                <div className="mb-4 bg-[var(--bg-primary)] p-3 rounded-xl border border-[var(--border-color)] text-sm">
+                  <h4 className="font-medium text-[var(--text-primary)] mb-2 text-xs uppercase tracking-wide">Split & Approve</h4>
+                  <div className="space-y-2">
+                    {contributors.map((c, idx) => (
+                      <div key={idx} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={async () => {
+                              try {
+                                await api.approveContributor(session_id, c.user_id, !c.approval_status)
+                                const newC = [...contributors]
+                                newC[idx].approval_status = !newC[idx].approval_status
+                                setContributors(newC)
+                              } catch (e) { console.error(e) }
+                            }}
+                            className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${c.approval_status ? 'bg-green-500 border-green-500' : 'border-[var(--text-muted)]'}`}
+                          >
+                            {c.approval_status && <Check className="w-3 h-3 text-white" />}
+                          </button>
+                          <span className="text-[var(--text-secondary)]">{c.user_id === 'primary' ? 'You' : c.user_id}</span>
+                        </div>
+                        <span className="text-[var(--text-primary)] font-medium">₹{Math.round(total * c.fraction_owed)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <button
                 onClick={handleConfirm}
-                disabled={loading || buyableItems.length === 0}
-                className="swiggy-btn-primary w-full py-3.5 text-sm flex items-center justify-center gap-2"
+                disabled={loading || buyableItems.length === 0 || (session_type === 'group' && contributors.some(c => !c.approval_status))}
+                className="bg-[var(--accent)] hover:bg-[#ea580c] disabled:opacity-50 text-white font-bold w-full py-4 rounded-xl text-base flex items-center justify-center gap-2 transition-colors mt-2"
               >
                 {loading ? (
                   <>
                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Ordering...
+                    Processing...
                   </>
                 ) : (
                   <>
-                    Place Order
+                    Proceed to Pay
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}

@@ -1,12 +1,15 @@
 import { useState, useRef } from 'react'
 import { useStore } from '../../lib/store'
 import { api } from '../../lib/api'
-import { Youtube, Globe, Type, ArrowRight, Instagram, ChefHat } from 'lucide-react'
+import { Youtube, Globe, Type, ArrowRight, Instagram, ChefHat, Users, UserPlus } from 'lucide-react'
 
 export default function RecipeInput() {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
-  const { session_id, setScreen, reset } = useStore()
+  const [sessionType, setSessionType] = useState<'solo' | 'group'>('solo')
+  const [roommates, setRoommates] = useState<string[]>([])
+  const [newRoommate, setNewRoommate] = useState('')
+  const { session_id, setScreen, reset, setSessionType: setStoreSessionType, setContributors } = useStore()
   const [auth, setAuth] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
@@ -35,12 +38,30 @@ export default function RecipeInput() {
     setLoading(true)
     reset()
     try {
-      await api.processRecipe(session_id, url)
+      const contributors = sessionType === 'group' 
+        ? [...roommates, 'You'].map((name) => ({
+            user_id: name === 'You' ? 'primary' : name,
+            fraction_owed: 1 / (roommates.length + 1),
+            approval_status: name === 'You' ? true : false,
+          }))
+        : []
+      
+      setStoreSessionType(sessionType)
+      setContributors(contributors)
+      
+      await api.processRecipe(session_id, url, sessionType, contributors)
       setScreen('progress')
     } catch (err) {
       console.error(err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleAddRoommate = () => {
+    if (newRoommate.trim() && !roommates.includes(newRoommate.trim())) {
+      setRoommates([...roommates, newRoommate.trim()])
+      setNewRoommate('')
     }
   }
 
@@ -100,55 +121,110 @@ export default function RecipeInput() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto mt-8 animate-fade-in">
+    <div className="max-w-3xl mx-auto mt-4 animate-fade-in">
       {/* Hero */}
-      <div className="text-center mb-12">
-        <h2 className="font-outfit text-5xl md:text-6xl font-bold text-[var(--text-primary)] mb-5 tracking-tight leading-tight">
-          Turn Inspiration<br />
-          <span className="text-[var(--accent)] drop-shadow-sm">Into Ingredients.</span>
+      <div className="mb-8">
+        <h2 className="text-3xl font-extrabold text-[var(--text-primary)] mb-2 tracking-tight">
+          InstaChef <span className="text-[var(--accent)]">Order</span>
         </h2>
-        <p className="text-[var(--text-muted)] text-base md:text-lg max-w-md mx-auto leading-relaxed font-medium">
-          Paste a recipe video, reel, or blog. We'll find every item on Instamart in seconds.
+        <p className="text-[var(--text-secondary)] text-sm font-medium">
+          Paste a recipe link or text. We'll add the exact ingredients to your Instamart cart.
         </p>
       </div>
 
       {/* Input */}
-      <div className="swiggy-card p-2 shadow-float hover:shadow-glow-swiggy transition-shadow duration-500 rounded-2xl relative bg-white/60 backdrop-blur-xl border border-[var(--border-color)]">
-        <div className="absolute inset-0 bg-gradient-to-r from-[var(--accent-subtle)] to-transparent rounded-2xl pointer-events-none opacity-50" />
-        <form onSubmit={handleSubmit} className="relative z-10">
-          <div className="relative flex items-center gap-2 bg-[var(--bg-card)] rounded-xl px-2 py-1 shadow-inner">
-            <input
-              ref={inputRef}
-              type="text"
-              id="recipe-input"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste YouTube, Instagram, or blog link..."
-              className="flex-1 py-4 px-4 bg-transparent text-lg text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none font-medium"
-            />
-            {inputType && (
-              <div className="pr-2 flex items-center animate-scale-in">
-                {inputType === 'youtube' && <Youtube className="w-6 h-6 text-red-500 drop-shadow-sm" />}
-                {inputType === 'instagram' && <Instagram className="w-6 h-6 text-pink-500 drop-shadow-sm" />}
-                {inputType === 'blog' && <Globe className="w-6 h-6 text-blue-500 drop-shadow-sm" />}
-                {inputType === 'text' && <Type className="w-6 h-6 text-[var(--text-muted)] drop-shadow-sm" />}
-              </div>
-            )}
-            <button
-              type="submit"
-              id="cook-this-btn"
-              disabled={loading || !url.trim()}
-              className="swiggy-btn-primary px-8 py-4 text-base flex items-center gap-2 shrink-0 shadow-glow-swiggy group"
-            >
-              {loading ? (
-                <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  <span className="font-bold tracking-wide">Gather</span>
-                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                </>
+      <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-4 shadow-sm">
+        <form onSubmit={handleSubmit}>
+          <div className="relative flex flex-col gap-4">
+            <div className="flex items-center gap-2 border border-[var(--border-color)] bg-[var(--bg-primary)] rounded-xl px-2 py-1 focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)] transition-all">
+              <input
+                ref={inputRef}
+                type="text"
+                id="recipe-input"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="Paste YouTube, Instagram, or blog link..."
+                className="flex-1 py-3 px-3 bg-transparent text-lg text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none font-medium"
+              />
+              {inputType && (
+                <div className="pr-2 flex items-center animate-scale-in">
+                  {inputType === 'youtube' && <Youtube className="w-6 h-6 text-red-500 drop-shadow-sm" />}
+                  {inputType === 'instagram' && <Instagram className="w-6 h-6 text-pink-500 drop-shadow-sm" />}
+                  {inputType === 'blog' && <Globe className="w-6 h-6 text-blue-500 drop-shadow-sm" />}
+                  {inputType === 'text' && <Type className="w-6 h-6 text-[var(--text-muted)] drop-shadow-sm" />}
+                </div>
               )}
-            </button>
+              <button
+                type="submit"
+                id="cook-this-btn"
+                disabled={loading || !url.trim()}
+                className="bg-[var(--accent)] hover:bg-[#ea580c] disabled:opacity-50 text-white px-6 py-3 rounded-lg text-sm font-bold flex items-center gap-2 shrink-0 transition-colors"
+              >
+                {loading ? (
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <span>Search Instamart</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* HostelSync Group Mode Toggle */}
+            <div className="border-t border-[var(--border-color)] pt-3 px-2 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-[var(--text-secondary)]">Who is cooking?</p>
+                <div className="flex bg-[var(--bg-primary)] p-1 rounded-xl border border-[var(--border-color)]">
+                  <button
+                    type="button"
+                    onClick={() => setSessionType('solo')}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                      sessionType === 'solo' ? 'bg-[var(--bg-card)] shadow-sm text-[var(--text-primary)]' : 'text-[var(--text-muted)]'
+                    }`}
+                  >
+                    Just me
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSessionType('group')}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5 ${
+                      sessionType === 'group' ? 'bg-[var(--bg-card)] shadow-sm text-[var(--text-primary)]' : 'text-[var(--text-muted)]'
+                    }`}
+                  >
+                    <Users className="w-4 h-4" /> Group
+                  </button>
+                </div>
+              </div>
+
+              {sessionType === 'group' && (
+                <div className="animate-fade-in bg-sand-50 dark:bg-[#34302c] rounded-xl p-3 border border-[var(--border-color)]">
+                  <p className="text-xs text-[var(--text-muted)] mb-2">Add roommates to split the bill evenly. They will approve their share.</p>
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    <span className="bg-[var(--bg-card)] px-3 py-1 rounded-full text-xs font-medium border border-[var(--border-color)] text-[var(--text-primary)]">You (1/{roommates.length + 1})</span>
+                    {roommates.map((r, i) => (
+                      <span key={i} className="bg-[var(--bg-card)] px-3 py-1 rounded-full text-xs font-medium border border-[var(--border-color)] text-[var(--text-primary)] flex items-center gap-1">
+                        {r} (1/{roommates.length + 1})
+                        <button type="button" onClick={() => setRoommates(roommates.filter(x => x !== r))} className="text-red-400 hover:text-red-600 ml-1">×</button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newRoommate}
+                      onChange={(e) => setNewRoommate(e.target.value)}
+                      placeholder="Roommate name..."
+                      onKeyDown={(e) => { if(e.key === 'Enter') { e.preventDefault(); handleAddRoommate(); }}}
+                      className="flex-1 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg px-3 py-1.5 text-sm focus:outline-none"
+                    />
+                    <button type="button" onClick={handleAddRoommate} className="swiggy-btn-ghost px-3 py-1.5 text-sm flex items-center gap-1">
+                      <UserPlus className="w-4 h-4" /> Add
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </form>
 
@@ -178,32 +254,6 @@ export default function RecipeInput() {
           >
             Dal Tadka
           </button>
-        </div>
-      </div>
-
-      {/* How it works */}
-      <div className="mt-16">
-        <p className="text-center text-xs text-[var(--text-muted)] uppercase tracking-wider font-medium mb-6">
-          How it works
-        </p>
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-          {[
-            { label: 'Read', desc: 'Recipe from any source' },
-            { label: 'Find', desc: 'Ingredients on Instamart' },
-            { label: 'Pick', desc: 'Best sizes for less waste' },
-            { label: 'Order', desc: 'Delivered to your door' },
-          ].map((step, i) => (
-            <div
-              key={step.label}
-              className="text-center p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:shadow-card-hover transition-shadow duration-300"
-            >
-              <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-sand-100 text-[var(--text-secondary)] text-sm font-semibold mb-3">
-                {i + 1}
-              </span>
-              <p className="text-sm font-semibold text-[var(--text-primary)] mb-1">{step.label}</p>
-              <p className="text-xs text-[var(--text-muted)]">{step.desc}</p>
-            </div>
-          ))}
         </div>
       </div>
     </div>

@@ -16,22 +16,19 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className="light">
+    <html lang="en" className="dark">
       <body className={`${inter.variable} ${outfit.variable} font-sans`}>
         <div className="min-h-screen flex flex-col bg-[var(--bg-primary)]">
           {/* Clean, minimal header */}
           <header className="sticky top-0 z-50 border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md">
-            <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
+            <div className="max-w-4xl mx-auto px-6 h-16 flex items-center justify-between">
               {/* Logo */}
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 bg-[var(--accent)] rounded-xl flex items-center justify-center">
-                  <svg viewBox="0 0 24 24" className="w-4.5 h-4.5 text-white" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <path d="M12 3C7.5 3 3.5 6 3 10c-.5 4 2 7.5 9 10.7C19 17.5 21.5 14 21 10c-.5-4-4.5-7-9-7z" />
-                    <path d="M12 7v6M8 12l4-4 4 4" />
-                  </svg>
-                </div>
-                <span className="text-lg font-semibold text-[var(--text-primary)] tracking-tight">
-                  InstaChef
+              <div className="flex items-center gap-2">
+                <svg viewBox="0 0 24 24" className="w-8 h-8 text-[var(--accent)]" fill="currentColor">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z" />
+                </svg>
+                <span className="font-extrabold text-2xl tracking-tighter text-[var(--text-primary)] font-outfit">
+                  Insta<span className="text-[var(--accent)]">Chef</span>
                 </span>
               </div>
 
