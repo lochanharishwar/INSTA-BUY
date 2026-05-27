@@ -235,6 +235,22 @@ async def approve_contributor(req: ContributorApprovalRequest):
     return {"status": "success", "contributors": contributors}
 
 
+@app.get("/api/session")
+async def get_session(session_id: str):
+    graph = build_graph()
+    config = {"configurable": {"thread_id": session_id}}
+    state = graph.get_state(config)
+    
+    if not state or not state.values:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    return {
+        "status": "success",
+        "cart_items": state.values.get("cart_items", []),
+        "contributors": state.values.get("contributors", []),
+        "session_type": state.values.get("session_type", "solo")
+    }
+
 @app.get("/api/stream")
 async def stream_events(session_id: str, request: Request):
     if session_id not in event_queues:

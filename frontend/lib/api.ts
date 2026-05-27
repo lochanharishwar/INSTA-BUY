@@ -45,5 +45,9 @@ export const api = {
   trackOrder: async (sessionId: string) => {
     const res = await fetch(`${API_URL}/api/track?session_id=${sessionId}`);
     return res.json();
+  },
+  getSession: async (sessionId: string) => {
+    const res = await fetch(`${API_URL}/api/session?session_id=${sessionId}`);
+    return res.json();
   }
 };

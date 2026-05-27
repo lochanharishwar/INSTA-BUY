@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useStore } from '../../lib/store'
 import { api } from '../../lib/api'
-import { ChevronDown, ChevronUp, Leaf, AlertTriangle, ShoppingCart, ArrowRight, Info, Trash2, Copy, Check, PackageCheck } from 'lucide-react'
+import { ChevronDown, ChevronUp, Leaf, AlertTriangle, ShoppingCart, ArrowRight, Info, Trash2, Copy, Check, PackageCheck, Link2 } from 'lucide-react'
 
 const STATUS: Record<string, { label: string; color: string; bg: string; border: string }> = {
   high:        { label: 'Great pick',  color: 'text-green-700',  bg: 'bg-green-50',  border: 'border-green-100' },
@@ -24,6 +24,7 @@ export default function CartReview() {
   const [loading, setLoading] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedLinkFor, setCopiedLinkFor] = useState<string | null>(null)
 
   if (!cart_proposal) return null;
 
@@ -312,7 +313,23 @@ export default function CartReview() {
                           </button>
                           <span className="text-[var(--text-secondary)]">{c.user_id === 'primary' ? 'You' : c.user_id}</span>
                         </div>
-                        <span className="text-[var(--text-primary)] font-medium">₹{Math.round(total * c.fraction_owed)}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[var(--text-primary)] font-medium">₹{Math.round(total * c.fraction_owed)}</span>
+                          {c.user_id !== 'primary' && (
+                            <button
+                              onClick={() => {
+                                const url = `${window.location.origin}?join=${session_id}&user=${encodeURIComponent(c.user_id)}`;
+                                navigator.clipboard.writeText(url);
+                                setCopiedLinkFor(c.user_id);
+                                setTimeout(() => setCopiedLinkFor(null), 2000);
+                              }}
+                              className="text-[var(--accent)] hover:bg-orange-50 p-1 rounded transition-colors"
+                              title="Copy invite link"
+                            >
+                              {copiedLinkFor === c.user_id ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
