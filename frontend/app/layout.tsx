@@ -16,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="light">
       <body className={`${inter.variable} ${outfit.variable} font-sans`}>
         <div className="min-h-screen flex flex-col bg-[var(--bg-primary)]">
           {/* Clean, minimal header */}

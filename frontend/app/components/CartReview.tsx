@@ -1,3 +1,4 @@
+'use client'
 import { useState } from 'react'
 import { useStore } from '../../lib/store'
 import { api } from '../../lib/api'
@@ -75,9 +76,8 @@ export default function CartReview() {
     ? buyableItems.reduce((sum: number, i: any) => sum + (i.waste_pct || 0), 0) / buyableItems.length
     : 0;
 
-  const wasteOptimized = buyableItems.filter((i: any) => i.waste_pct !== undefined && i.waste_pct < 30).length;
+  const wasteOptimized = buyableItems.filter((i: any) => i.waste_pct !== undefined && (i.waste_pct < 30)).length;
   const highWasteItems = buyableItems.filter((i: any) => (i.waste_pct || 0) > 50);
-
   return (
     <div className="pb-10 animate-fade-in max-w-5xl mx-auto">
       {/* Header */}
@@ -124,7 +124,7 @@ export default function CartReview() {
               </div>
               <p className="text-xs text-green-700 leading-relaxed">
                 We picked the smallest pack that covers your recipe to reduce waste.
-                {wasteOptimized > 0 && <> <span className="font-semibold">{wasteOptimized} of {buyableItems.length}</span> items sized for single use.</>}
+                {wasteOptimized > 0 && <span className="font-medium ml-1"><span className="font-bold text-green-900">{wasteOptimized} of {buyableItems.length}</span> items sized for single use.</span>}
               </p>
             </div>
           )}
@@ -340,6 +340,5 @@ export default function CartReview() {
           </div>
         </div>
       </div>
-    </div>
   )
 }
