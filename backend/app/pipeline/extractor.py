@@ -2,6 +2,7 @@ import hashlib
 import sys
 import os
 import structlog
+import asyncio
 from redis import Redis
 from youtube_transcript_api import YouTubeTranscriptApi
 from recipe_scrapers import scrape_me
@@ -11,9 +12,13 @@ import urllib.parse as urlparse
 
 logger = structlog.get_logger()
 
-redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+try:
+    redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+except Exception:
+    redis_client = None
 
-CACHE_TTL = 86400  # 24 hours — no reason to re-fetch the same content
+CACHE_TTL = 86400  # 24 hours
+CACHE_TTL_SHORT = 3600  # 1 hour for less stable content
 
 
 def get_video_id(url):
@@ -38,12 +43,12 @@ def _get_yt_dlp_path() -> str:
             return path
     return "yt-dlp"
 
+
 async def _get_youtube_metadata(url: str) -> str:
     """Fetch video title and description using yt-dlp."""
     try:
         import subprocess
         yt_dlp_bin = _get_yt_dlp_path()
-        # Use --print to get title and description in one go
         result = subprocess.run(
             [yt_dlp_bin, "--print", "title", "--print", "description", "--no-playlist", url],
             check=True, capture_output=True, text=True, timeout=10, encoding='utf-8'
@@ -54,15 +59,32 @@ async def _get_youtube_metadata(url: str) -> str:
         return ""
 
 
+def _cache_get(key: str) -> str | None:
+    if redis_client:
+        try:
+            return redis_client.get(key)
+        except Exception:
+            pass
+    return None
+
+
+def _cache_set(key: str, value: str, ttl: int = CACHE_TTL):
+    if redis_client:
+        try:
+            redis_client.setex(key, ttl, value)
+        except Exception:
+            pass
+
+
 async def extract_content(url_or_text: str, input_type: str) -> tuple[str, str]:
     """
     Extract raw text content from a URL or plain text.
-    Uses a 3-tier fallback for YouTube: subtitles → faster-whisper → OpenAI Whisper.
-    Uses Apify 3-actor fallback for Instagram Reels.
+    Uses a 4-tier fallback for YouTube: subtitles → metadata → faster-whisper → OpenAI Whisper.
+    Uses multi-strategy fallback for Instagram Reels.
     All results are cached in Redis for 24 hours.
     """
     cache_key = f"extract:{hashlib.sha256(url_or_text.encode()).hexdigest()}"
-    cached = redis_client.get(cache_key)
+    cached = _cache_get(cache_key)
     if cached:
         return cached, "cache"
 
@@ -81,7 +103,7 @@ async def extract_content(url_or_text: str, input_type: str) -> tuple[str, str]:
         source = "text"
 
     if content:
-        redis_client.setex(cache_key, CACHE_TTL, content)
+        _cache_set(cache_key, content, CACHE_TTL)
 
     if not content:
         raise Exception("Could not extract any content from the provided input.")
@@ -96,17 +118,15 @@ async def _extract_youtube(url: str) -> tuple[str, str]:
 
     errors = []
     
-    # Pre-fetch metadata (Description often contains the full ingredient list!)
     metadata = await _get_youtube_metadata(url)
     if metadata:
         logger.info("extract.youtube.metadata_fetched", video_id=video_id)
 
-    # ── Tier 1: YouTube Transcript API (fastest, free) ────────────
+    # Tier 1: YouTube Transcript API (fastest, free)
     try:
         transcript_list = YouTubeTranscriptApi().fetch(
             video_id, languages=["en", "hi", "ta", "te", "kn", "mr"]
         )
-        # In version 1.2.x, transcript_list is an Iterable of FetchedTranscriptSnippet objects, which have a .text attribute
         content = " ".join([snippet.text for snippet in transcript_list])
         if content.strip():
             final_content = f"VIDEO METADATA:\n{metadata}\n\nTRANSCRIPT:\n{content}"
@@ -118,13 +138,12 @@ async def _extract_youtube(url: str) -> tuple[str, str]:
         logger.info("extract.youtube.subtitles_failed", video_id=video_id,
                       error=str(e)[:100])
 
-    # ── Fast Fallback: Use Metadata if Subtitles fail ─────────────
-    # If we have a substantial description, use it and skip the slow local transcription.
+    # Fast Fallback: Use Metadata if Subtitles fail
     if metadata and len(metadata.strip().split()) > 20:
         logger.info("extract.youtube.using_metadata_fallback", video_id=video_id)
         return f"VIDEO METADATA (FALLBACK):\n{metadata}", "metadata_fallback"
 
-    # ── Tier 2: yt-dlp + faster-whisper (local, free) ─────────────
+    # Tier 2: yt-dlp + faster-whisper (local, free)
     try:
         import subprocess
         import tempfile
@@ -155,7 +174,7 @@ async def _extract_youtube(url: str) -> tuple[str, str]:
         logger.info("extract.youtube.faster_whisper_failed",
                       video_id=video_id, error=str(e)[:100])
 
-    # ── Tier 3: OpenAI Whisper API (paid, reliable) ───────────────
+    # Tier 3: OpenAI Whisper API (paid, reliable)
     if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY != "your_openai_key_here":
         try:
             import subprocess
@@ -165,7 +184,6 @@ async def _extract_youtube(url: str) -> tuple[str, str]:
                 audio_path = os.path.join(tmpdir, "audio.m4a")
                 yt_dlp_bin = _get_yt_dlp_path()
 
-                # Only download if not already downloaded
                 if not os.path.exists(audio_path):
                     subprocess.run(
                         [yt_dlp_bin, "-f", "bestaudio[ext=m4a]/bestaudio",
@@ -189,7 +207,7 @@ async def _extract_youtube(url: str) -> tuple[str, str]:
             logger.info("extract.youtube.whisper_api_failed",
                           video_id=video_id, error=str(e)[:100])
 
-    # ── All tiers failed ──────────────────────────────────────────
+    # All tiers failed
     raise Exception(
         f"All transcription methods failed for video {video_id}. "
         f"Errors: {'; '.join(errors)}. "
@@ -220,3 +238,8 @@ def _extract_blog(url: str) -> tuple[str, str]:
         pass
 
     raise Exception("Could not extract content from the provided blog URL.")
+
+
+async def _extract_blog_async(url: str) -> tuple[str, str]:
+    """Async wrapper for blog extraction."""
+    return _extract_blog(url)

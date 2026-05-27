@@ -8,22 +8,35 @@ from app.mcp.auth import MCPAuth
 
 logger = structlog.get_logger()
 
-# Methods that are not safe to blind-retry
 NON_IDEMPOTENT_TOOLS = {"checkout", "place_food_order", "book_table"}
+
 
 class MCPClient:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.auth = MCPAuth(session_id)
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=30.0,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+            )
+        return self._client
+
+    async def close(self):
+        if self._client:
+            await self._client.aclose()
+            self._client = None
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         if name in NON_IDEMPOTENT_TOOLS:
-            # Special handling for non-idempotent tools (no blind retries)
             return await self._execute_call(name, arguments)
         
-        # Idempotent tools: exponential backoff retry
         max_attempts = 4
         attempt = 0
+        
         while True:
             try:
                 return await self._execute_call(name, arguments)
@@ -32,7 +45,6 @@ class MCPClient:
                 if attempt >= max_attempts:
                     raise e
                 
-                # Check if it's a 4xx (except 429) - don't retry bad requests
                 if isinstance(e, httpx.HTTPStatusError):
                     status = e.response.status_code
                     if 400 <= status < 500 and status != 429 and status != 401:
@@ -66,14 +78,14 @@ class MCPClient:
 
         logger.info("mcp.call", tool=name, request_id=request_id, args_keys=list(arguments.keys()))
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        client = await self._get_client()
+        try:
             resp = await client.post(
                 settings.SWIGGY_MCP_INSTAMART_URL,
                 json=payload,
                 headers={"Authorization": f"Bearer {token}"}
             )
             
-            # Rate limiting handling
             if resp.status_code == 429:
                 retry_after = int(resp.headers.get("Retry-After", "30"))
                 logger.warning("mcp.rate_limited", tool=name, retry_after=retry_after)
@@ -92,6 +104,11 @@ class MCPClient:
 
             logger.info("mcp.success", tool=name, request_id=request_id)
             return data["result"]
+        except httpx.HTTPStatusError:
+            raise
+        except Exception as e:
+            logger.error("mcp.unknown_error", tool=name, error=str(e), request_id=request_id)
+            raise
 
     def _mock_call(self, name: str, arguments: Dict[str, Any]) -> Any:
         if name == "get_addresses":
@@ -101,18 +118,38 @@ class MCPClient:
             ]
         elif name == "search_products":
             query = arguments.get("query", "").lower()
-            return {
-                "products": [
-                    {
-                        "name": f"{query.title()} Premium",
-                        "brand": "Organic Tattva" if "spice" in query or "powder" in query else "Fresh & Pure",
-                        "variants": [
-                            {"spinId": f"mock_spin_{query.replace(' ', '_')}_1", "price": 120, "pack_grams": 500, "in_stock": True, "display": "500g", "brand": "Fresh & Pure"}
-                        ],
-                        "image_url": f"https://placehold.co/150x150?text={query.replace(' ', '+')}"
-                    }
-                ]
-            }
+            products = [
+                {
+                    "name": f"{query.title()} Premium",
+                    "brand": "Organic Tattva" if "spice" in query or "powder" in query else "Fresh & Pure",
+                    "variants": [
+                        {"spinId": f"mock_spin_{query.replace(' ', '_')}_1", "price": 120, "pack_grams": 500, "in_stock": True, "display": "500g", "brand": "Fresh & Pure"}
+                    ],
+                    "image_url": f"https://placehold.co/150x150?text={query.replace(' ', '+')}"
+                }
+            ]
+            
+            # Add more mock products for variety
+            if "chicken" in query:
+                products.append({
+                    "name": "Fresh Chicken Breast",
+                    "brand": "Licious",
+                    "variants": [
+                        {"spinId": f"mock_spin_chicken_1", "price": 250, "pack_grams": 500, "in_stock": True, "display": "500g", "brand": "Licious"}
+                    ],
+                    "image_url": "https://placehold.co/150x150?text=Chicken"
+                })
+            if "tomato" in query:
+                products.append({
+                    "name": "Fresh Tomatoes",
+                    "brand": "Farm Fresh",
+                    "variants": [
+                        {"spinId": f"mock_spin_tomato_1", "price": 35, "pack_grams": 500, "in_stock": True, "display": "500g", "brand": "Farm Fresh"}
+                    ],
+                    "image_url": "https://placehold.co/150x150?text=Tomato"
+                })
+                
+            return {"products": products}
         elif name == "get_cart":
             return {"items": [], "bill": {"total": 0}}
         elif name == "update_cart":
@@ -159,3 +196,25 @@ class MCPClient:
         elif name == "report_error":
             return {"success": True, "ticketId": f"TKT-{uuid.uuid4().hex[:8]}"}
         return {}
+
+
+class MCPClientPool:
+    """Connection pooling for MCP clients"""
+    def __init__(self):
+        self._clients: Dict[str, MCPClient] = {}
+        self._lock = asyncio.Lock()
+
+    async def get_client(self, session_id: str) -> MCPClient:
+        async with self._lock:
+            if session_id not in self._clients:
+                self._clients[session_id] = MCPClient(session_id)
+            return self._clients[session_id]
+
+    async def close_all(self):
+        async with self._lock:
+            for client in self._clients.values():
+                await client.close()
+            self._clients.clear()
+
+
+mcp_client_pool = MCPClientPool()

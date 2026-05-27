@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "secret"
     LOG_LEVEL: str = "INFO"
     MOCK_MCP: bool = True
+    RAPIDAPI_KEY: str = ""
+    INSTALOADER_SESSION: str = ""
 
     class Config:
         env_file = ".env"

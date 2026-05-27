@@ -292,13 +292,12 @@ async def normalize_node(state: GraphState) -> GraphState:
     return {"normalized_ingredients": normalized, "pipeline_trace": trace}
 
 
-# ─── Node: Search Instamart (with synonym retry) ─────────────────────
+# ─── Node: Search Instamart (with parallel processing & retry) ─────
 
 async def search_instamart_node(state: GraphState) -> GraphState:
     t0 = time.time()
     client = MCPClient(state["session_id"])
 
-    # Use address from UserContext (already resolved)
     ctx = state.get("user_context") or UserContext()
     address_id = ctx.address_id or "mock_addr_1"
 
@@ -311,7 +310,6 @@ async def search_instamart_node(state: GraphState) -> GraphState:
                 res = await client.call_tool("search_products", {
                     "addressId": address_id, "query": term
                 })
-                # If no results, try a simplified search term
                 if not res.get("products"):
                     simplified = term.split()[0] if " " in term else term
                     if simplified != term:
@@ -325,14 +323,24 @@ async def search_instamart_node(state: GraphState) -> GraphState:
                 logger.warning("search.failed", term=term, error=str(e))
                 return term, {"products": []}
 
-    tasks = [do_search(ing["search_term"]) for ing in state["normalized_ingredients"]]
-    results = await asyncio.gather(*tasks)
+    normalized_ingredients = state.get("normalized_ingredients", [])
+    
+    # Parallel search with optimized concurrency
+    search_tasks = [do_search(ing["search_term"]) for ing in normalized_ingredients]
+    
+    # Use asyncio.gather with return_exceptions to handle individual failures gracefully
+    results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-    for term, res in results:
+    # Handle results - some might be exceptions
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning("search.task_failed", error=str(result))
+            continue
+        term, res = result
         search_results[term] = res
 
     found_count = sum(1 for res in search_results.values() if res.get("products"))
-    missing_count = len(state["normalized_ingredients"]) - found_count
+    missing_count = len(normalized_ingredients) - found_count
     duration = int((time.time() - t0) * 1000)
 
     logger.info("node.search", session_id=state["session_id"],
