@@ -110,3 +110,5 @@ __pycache__/
 *.key
 *credentials*.json
 *service-account*.json
+
+frontend/.next.previous-*/
