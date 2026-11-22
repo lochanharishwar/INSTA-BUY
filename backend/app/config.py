@@ -1,11 +1,15 @@
-from pydantic_settings import BaseSettings
-from typing import Optional
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     NVIDIA_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.8-flash"
+    ELEVENLABS_API_KEY: str = ""
+    ELEVENLABS_VOICE_ID: str = "JBFqnCBsd6RMkjVDRZzb"
     SWIGGY_CLIENT_ID: str = ""
     SWIGGY_CLIENT_SECRET: str = ""
     SWIGGY_MCP_INSTAMART_URL: str = "https://mcp.swiggy.com/im"
@@ -19,7 +23,9 @@ class Settings(BaseSettings):
     RAPIDAPI_KEY: str = ""
     INSTALOADER_SESSION: str = ""
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parents[1] / ".env",
+        env_file_encoding="utf-8-sig",
+    )
 
 settings = Settings()

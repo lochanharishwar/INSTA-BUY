@@ -156,6 +156,9 @@ async def _embed_inventory(
     Embed collected order items into the per-user ChromaDB vector store
     and refresh decay calculations.
     """
+    if not order_items and not ctx.go_to_items:
+        return
+
     try:
         from app.database import InventoryVectorStore
 

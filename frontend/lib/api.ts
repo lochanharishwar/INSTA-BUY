@@ -1,16 +1,34 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL
+  ? process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "")
+  : "/_backend";
+
+async function request(path: string, init?: RequestInit) {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, init);
+  } catch {
+    throw new Error(`Backend is not reachable at ${API_URL}. Start the FastAPI backend and refresh this page.`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload?.detail || payload?.message || `Request failed (${response.status})`;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return payload;
+}
+
+const sessionQuery = (sessionId: string) => `session_id=${encodeURIComponent(sessionId)}`;
 
 export const api = {
   checkAuth: async (sessionId: string) => {
-    const res = await fetch(`${API_URL}/auth/status?session_id=${sessionId}`);
-    return res.json();
+    return request(`/auth/status?${sessionQuery(sessionId)}`);
   },
   getLoginUrl: async (sessionId: string) => {
-    const res = await fetch(`${API_URL}/auth/login?session_id=${sessionId}`);
-    return res.json();
+    return request(`/auth/login?${sessionQuery(sessionId)}`);
   },
   processRecipe: async (sessionId: string, urlOrText: string, sessionType: "solo" | "group" = "solo", contributors?: any[]) => {
-    const res = await fetch(`${API_URL}/api/process`, {
+    return request(`/api/process`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -20,10 +38,9 @@ export const api = {
         contributors: contributors
       })
     });
-    return res.json();
   },
   approveContributor: async (sessionId: string, userId: string, approved: boolean) => {
-    const res = await fetch(`${API_URL}/api/cart/approve`, {
+    return request(`/api/cart/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -32,22 +49,39 @@ export const api = {
         approval_status: approved
       })
     });
-    return res.json();
   },
   confirmCart: async (sessionId: string, cartItems: any[]) => {
-    const res = await fetch(`${API_URL}/api/cart/confirm`, {
+    return request(`/api/cart/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, cart_items: cartItems })
     });
-    return res.json();
   },
   trackOrder: async (sessionId: string) => {
-    const res = await fetch(`${API_URL}/api/track?session_id=${sessionId}`);
-    return res.json();
+    return request(`/api/track?${sessionQuery(sessionId)}`);
   },
   getSession: async (sessionId: string) => {
-    const res = await fetch(`${API_URL}/api/session?session_id=${sessionId}`);
-    return res.json();
+    return request(`/api/session?${sessionQuery(sessionId)}`);
+  },
+  generateVoice: async (text: string) => {
+    const response = await fetch(`${API_URL}/api/voice`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }).catch(() => {
+      throw new Error(`Backend is not reachable at ${API_URL}.`);
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload?.detail || `Voice request failed (${response.status})`);
+    }
+    return response.blob();
+  },
+  compareOnlinePrices: async (ingredients: string[], location = "") => {
+    return request(`/api/compare-prices`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ingredients, location }),
+    });
   }
 };

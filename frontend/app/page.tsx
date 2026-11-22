@@ -6,8 +6,13 @@ import PipelineProgress from './components/PipelineProgress'
 import CartReview from './components/CartReview'
 import TrackingView from './components/TrackingView'
 import GuestView from './components/GuestView'
+import DemoExperience from './components/DemoExperience'
 
 export default function Home() {
+  return process.env.NEXT_PUBLIC_ENABLE_LIVE_MODE === 'true' ? <LiveHome /> : <DemoExperience />
+}
+
+function LiveHome() {
   const { session_id, screen, setSessionId } = useStore()
   const [guestSessionId, setGuestSessionId] = useState<string | null>(null)
   const [guestUserId, setGuestUserId] = useState<string | null>(null)

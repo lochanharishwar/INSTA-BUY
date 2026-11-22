@@ -1,19 +1,17 @@
 import type { Metadata } from 'next'
-import { Inter, Outfit } from 'next/font/google'
 import './globals.css'
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' })
-const outfit = Outfit({ subsets: ['latin'], variable: '--font-outfit', display: 'swap' })
+const liveMode = process.env.NEXT_PUBLIC_ENABLE_LIVE_MODE === 'true'
 
 export const metadata: Metadata = {
   title: 'InstaChef AI — Recipe to Instamart in One Click',
-  description: 'Paste any recipe link, video or text. We extract ingredients, optimize your cart, minimize waste, and order from Swiggy Instamart automatically.',
+  description: liveMode ? 'Turn recipes into grocery baskets.' : 'Watch a sample recipe, compare grocery baskets, and place a simulated order.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="light">
-      <body className={`${inter.variable} ${outfit.variable} font-sans`}>
+      <body className="font-sans">
         <div className="min-h-screen flex flex-col bg-[var(--bg-primary)]">
           {/* Header */}
           <header className="sticky top-0 z-50 border-b border-[var(--border-color)] bg-[var(--bg-card)]/90 backdrop-blur-md">
@@ -29,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <span className="font-extrabold text-xl leading-none tracking-tighter text-[var(--text-primary)]" style={{ fontFamily: 'var(--font-outfit)' }}>
                     Insta<span className="text-[var(--accent)]">Chef</span>
                   </span>
-                  <span className="text-[9px] font-bold text-[var(--text-muted)] tracking-widest uppercase">Swiggy Instamart</span>
+                  <span className="text-[9px] font-bold text-[var(--text-muted)] tracking-widest uppercase">{liveMode ? 'Swiggy Instamart' : 'Recipe to groceries'}</span>
                 </div>
               </div>
 
@@ -39,7 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--accent)] opacity-75" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--accent)]" />
                 </span>
-                <span className="text-[10px] font-bold text-[var(--accent)] uppercase tracking-wider">MCP Builders Club</span>
+                <span className="text-[10px] font-bold text-[var(--accent)] uppercase tracking-wider">{liveMode ? 'MCP Builders Club' : 'Demo mode'}</span>
               </div>
             </div>
           </header>

@@ -1,31 +1,28 @@
 # Render deployment manifest for the InstaChef AI project.
 
 services:
-  - type: web_service
+  - type: web
     name: instachef-backend
-    env: docker
+    runtime: docker
     branch: main
     region: oregon
     plan: starter
     dockerfilePath: backend/Dockerfile
     rootDir: .
+    healthCheckPath: /health
     envVars:
-      - key: REDIS_URL
-        value: ""
-      - key: OPENAI_API_KEY
-        value: ""
-      - key: ANTHROPIC_API_KEY
-        value: ""
-      - key: SWIGGY_CLIENT_ID
-        value: ""
-      - key: SWIGGY_CLIENT_SECRET
-        value: ""
-      - key: DATABASE_URL
-        value: ""
+      - key: MOCK_MCP
+        value: "true"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: JBFqnCBsd6RMkjVDRZzb
 
-  - type: web_service
+  - type: web
     name: instachef-frontend
-    env: node
+    runtime: node
     branch: main
     region: oregon
     plan: starter
@@ -33,5 +30,8 @@ services:
     buildCommand: npm install && npm run build
     startCommand: npm run start
     envVars:
-      - key: NEXT_PUBLIC_API_URL
-        value: ""
+      - key: BACKEND_INTERNAL_URL
+        fromService:
+          type: web
+          name: instachef-backend
+          property: host

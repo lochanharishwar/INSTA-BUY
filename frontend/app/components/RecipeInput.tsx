@@ -4,7 +4,7 @@ import { useStore } from '../lib/store'
 import { api } from '../../lib/api'
 import { HINDI_DIALOGUES, getDialogue } from '../lib/hindi-dialogues'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Youtube, Globe, Type, ArrowRight, Instagram, ChefHat, Users, UserPlus, Sparkles, Zap, Shield } from 'lucide-react'
+import { Youtube, Globe, Type, ArrowRight, Instagram, ChefHat, Users, UserPlus, Sparkles, Zap } from 'lucide-react'
 
 const QUICK_RECIPES = [
   { label: 'Butter Chicken', url: 'https://www.youtube.com/watch?v=9WXinXCkJoI', type: 'youtube' },
@@ -28,36 +28,18 @@ export default function RecipeInput() {
   const [newRoommate, setNewRoommate] = useState('')
   const [dialogue, setDialogue] = useState<{ text: string; movie: string; emoji: string } | null>(null)
   const { session_id, setScreen, reset, setSessionType: setStoreSessionType, setContributors } = useStore()
-  const [auth, setAuth] = useState(false)
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [isConnected, setIsConnected] = useState(false)
+  const [actionError, setActionError] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setDialogue(getDialogue('input'))
   }, [])
 
-  const handleConnect = async () => {
-    setIsConnecting(true)
-    try {
-      const res = await api.getLoginUrl(session_id)
-      if (res.url.includes('mock_auth=success')) {
-        setIsConnecting(false)
-        setIsConnected(true)
-        setTimeout(() => { setAuth(true); setDialogue(getDialogue('success')) }, 1200)
-      } else {
-        window.location.href = res.url
-      }
-    } catch (e) {
-      console.error(e)
-      setIsConnecting(false)
-    }
-  }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!url.trim()) return
     setLoading(true)
+    setActionError('')
     setDialogue(getDialogue('loading'))
     reset()
     try {
@@ -74,7 +56,7 @@ export default function RecipeInput() {
       setScreen('progress')
     } catch (err) {
       console.error(err)
-      setDialogue(getDialogue('error'))
+      setActionError(err instanceof Error ? err.message : getDialogue('error').text)
     } finally {
       setLoading(false)
     }
@@ -98,69 +80,6 @@ export default function RecipeInput() {
 
   const inputType = detectInputType(url)
 
-  if (!auth) {
-    return (
-      <div className="flex flex-col items-center justify-center mt-16 animate-fade-up">
-        <motion.div 
-          initial={{ scale: 0.9, opacity: 0 }} 
-          animate={{ scale: 1, opacity: 1 }} 
-          className="swiggy-card p-10 text-center max-w-sm w-full"
-        >
-          <div className="w-16 h-16 bg-gradient-to-br from-orange-100 to-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-lg shadow-orange-500/10">
-            <ChefHat className="w-8 h-8 text-[var(--accent)]" />
-          </div>
-          <h2 className="text-2xl font-extrabold text-[var(--text-primary)] mb-2 tracking-tight">Connect Instamart</h2>
-          <p className="text-sm text-[var(--text-muted)] mb-8 leading-relaxed">
-            Link your Swiggy account to add items to cart and track delivery.
-          </p>
-          
-          <AnimatePresence mode="wait">
-            {dialogue && (
-              <motion.div 
-                key={dialogue.text}
-                initial={{ opacity: 0, y: 8 }} 
-                animate={{ opacity: 1, y: 0 }} 
-                exit={{ opacity: 0, y: -8 }}
-                className="hindi-banner mb-6 text-left"
-              >
-                <span className="mr-2">{dialogue.emoji}</span>
-                <span>"{dialogue.text}"</span>
-                <div className="text-[10px] text-amber-700/60 mt-1 ml-6">— {dialogue.movie}</div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <button
-            onClick={handleConnect}
-            disabled={isConnecting || isConnected}
-            className={`w-full py-4 text-base rounded-2xl font-bold transition-all duration-300 flex items-center justify-center gap-2 ${
-              isConnected
-                ? 'bg-green-500 text-white shadow-lg shadow-green-500/20'
-                : 'swiggy-btn'
-            }`}
-          >
-            {isConnecting ? (
-              <>
-                <span className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-                Connecting...
-              </>
-            ) : isConnected ? (
-              <>
-                <Shield className="w-5 h-5" />
-                Connected! Swiggy se jud gaya bhai!
-              </>
-            ) : (
-              <>
-                Connect Account
-                <ArrowRight className="w-5 h-5" />
-              </>
-            )}
-          </button>
-        </motion.div>
-      </div>
-    )
-  }
-
   return (
     <div className="max-w-3xl mx-auto animate-fade-up">
       {/* Hero */}
@@ -177,8 +96,7 @@ export default function RecipeInput() {
           InstaChef <span className="text-[var(--accent)]">AI</span>
         </h1>
         <p className="text-[var(--text-secondary)] text-base md:text-lg max-w-xl mx-auto leading-relaxed">
-          Paste a recipe link or text. We'll extract ingredients, find them on Swiggy Instamart, 
-          and optimize your cart — <span className="font-semibold text-[var(--text-primary)]">minimizing waste and splitting bills automatically.</span>
+          Paste a recipe link or text. Gemini extracts and organizes the ingredients, then you can search each one on Swiggy Instamart, Blinkit, or Zepto and add it in the store app.
         </p>
       </div>
 
@@ -198,6 +116,12 @@ export default function RecipeInput() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {actionError && (
+        <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {actionError}
+        </div>
+      )}
 
       {/* Input Card */}
       <motion.div 

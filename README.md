@@ -1,7 +1,6 @@
 # 🍳 InstaChef AI — Mise en Place
 
-**Turn any recipe video, blog, or text into a real Swiggy Instamart grocery order.
-Now with group checkout, vector-embedded pantry intelligence, and real-time agentic progress.**
+**Turn recipe links or text into an organized grocery list, then search each ingredient on Swiggy Instamart, Blinkit, or Zepto.**
 
 > **"Mise en place"** (French: "everything in its place") — the professional chef's practice of preparing all ingredients before cooking begins. This agent embodies the same principle: every ingredient sourced, optimized, and ready before you step into the kitchen.
 
@@ -21,7 +20,7 @@ But:
 - Figure out who owes what if you're cooking with roommates
 - Place the order 20 minutes later
 
-**InstaChef AI does all of this in one click.**
+InstaChef AI extracts the ingredients and opens store search pages. Store prices, stock, cart actions, and checkout stay with each grocery service; direct Swiggy checkout requires authorized Swiggy partner access.
 
 **Demo** (30s): Paste a YouTube recipe URL and watch the pipeline classify, extract, understand, optimize, and build a cart — live.
 
@@ -155,11 +154,14 @@ pip install -r requirements.txt
 ```
 
 ### 2. Configure API Keys
-Copy `backend/.env` and add:
+From the project root, copy `backend/.env.example` to `backend/.env` and add your keys:
 ```env
-NVIDIA_API_KEY=your_nvidia_nim_key
-MOCK_MCP=true  # Set false for real Swiggy integration
+GEMINI_API_KEY=your_gemini_api_key
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+MOCK_MCP=true
 ```
+
+Keep `backend/.env` local; it is ignored by Git. `MOCK_MCP=true` enables recipe processing and store search links without Swiggy credentials. It does not create fake products or place orders.
 
 ### 3. Start Backend
 ```bash

@@ -112,89 +112,24 @@ class MCPClient:
 
     def _mock_call(self, name: str, arguments: Dict[str, Any]) -> Any:
         if name == "get_addresses":
-            return [
-                {"id": "mock_addr_1", "label": "Home", "address": "123 Mock St, Bangalore 560001"},
-                {"id": "mock_addr_2", "label": "Office", "address": "456 Tech Park, Bangalore 560037"},
-            ]
-        elif name == "search_products":
-            query = arguments.get("query", "").lower()
-            products = [
-                {
-                    "name": f"{query.title()} Premium",
-                    "brand": "Organic Tattva" if "spice" in query or "powder" in query else "Fresh & Pure",
-                    "variants": [
-                        {"spinId": f"mock_spin_{query.replace(' ', '_')}_1", "price": 120, "pack_grams": 500, "in_stock": True, "display": "500g", "brand": "Fresh & Pure"}
-                    ],
-                    "image_url": f"https://placehold.co/150x150?text={query.replace(' ', '+')}"
-                }
-            ]
-            
-            # Add more mock products for variety
-            if "chicken" in query:
-                products.append({
-                    "name": "Fresh Chicken Breast",
-                    "brand": "Licious",
-                    "variants": [
-                        {"spinId": f"mock_spin_chicken_1", "price": 250, "pack_grams": 500, "in_stock": True, "display": "500g", "brand": "Licious"}
-                    ],
-                    "image_url": "https://placehold.co/150x150?text=Chicken"
-                })
-            if "tomato" in query:
-                products.append({
-                    "name": "Fresh Tomatoes",
-                    "brand": "Farm Fresh",
-                    "variants": [
-                        {"spinId": f"mock_spin_tomato_1", "price": 35, "pack_grams": 500, "in_stock": True, "display": "500g", "brand": "Farm Fresh"}
-                    ],
-                    "image_url": "https://placehold.co/150x150?text=Tomato"
-                })
-                
-            return {"products": products}
-        elif name == "get_cart":
+            return []
+        if name == "search_products":
+            # Without Swiggy credentials, don't fabricate availability, prices, or SKUs.
+            return {"products": []}
+        if name == "get_cart":
             return {"items": [], "bill": {"total": 0}}
-        elif name == "update_cart":
+        if name in {"update_cart", "clear_cart", "checkout"}:
+            raise ValueError("A real Swiggy connection is required for cart and checkout actions")
+        if name == "track_order":
+            return {"status": "Live tracking requires a real Swiggy order", "eta_minutes": 0}
+        if name == "get_orders":
+            return []
+        if name == "your_go_to_items":
+            return {"items": []}
+        if name == "get_order_details":
+            return {"items": []}
+        if name == "report_error":
             return {"success": True}
-        elif name == "clear_cart":
-            return {"success": True}
-        elif name == "checkout":
-            return {"orderId": f"IM-{uuid.uuid4().hex[:8].upper()}"}
-        elif name == "track_order":
-            import random
-            statuses = ["Order Placed", "Being Packed", "Out for Delivery"]
-            return {"status": random.choice(statuses), "eta_minutes": random.randint(10, 25)}
-        elif name == "get_orders":
-            return [
-                {"orderId": "IM-DEMO001", "placed_at": "2 days ago", "total": 540},
-                {"orderId": "IM-DEMO002", "placed_at": "5 days ago", "total": 320},
-                {"orderId": "IM-DEMO003", "placed_at": "1 week ago", "total": 890},
-            ]
-        elif name == "your_go_to_items":
-            return {"items": [
-                {"spinId": "mock_spin_eggs_1", "name": "Farm Fresh Eggs (6 pcs)", "brand": "Nandini", "price": 60, "image_url": "https://placehold.co/150x150?text=Eggs"},
-                {"spinId": "mock_spin_milk_1", "name": "Full Cream Milk 500ml", "brand": "Nandini", "price": 30, "image_url": "https://placehold.co/150x150?text=Milk"},
-                {"spinId": "mock_spin_onion_1", "name": "Onion 1kg", "brand": "Fresh & Pure", "price": 40, "image_url": "https://placehold.co/150x150?text=Onion"},
-                {"spinId": "mock_spin_rice_1", "name": "Basmati Rice 1kg", "brand": "India Gate", "price": 180, "image_url": "https://placehold.co/150x150?text=Rice"},
-                {"spinId": "mock_spin_ghee_1", "name": "Pure Ghee 500ml", "brand": "Amul", "price": 280, "image_url": "https://placehold.co/150x150?text=Ghee"},
-            ]}
-        elif name == "get_order_details":
-            order_id = arguments.get("orderId", "")
-            if order_id == "IM-DEMO001":
-                return {"orderId": order_id, "status": "Delivered", "items": [
-                    {"name": "Basmati Rice 1kg", "brand": "India Gate", "price": 180, "quantity": 1},
-                    {"name": "Onion 1kg", "brand": "Fresh & Pure", "price": 40, "quantity": 2},
-                    {"name": "Chicken Breast 500g", "brand": "Licious", "price": 250, "quantity": 1},
-                ], "total": 510}
-            elif order_id == "IM-DEMO002":
-                return {"orderId": order_id, "status": "Delivered", "items": [
-                    {"name": "Paneer 200g", "brand": "Amul", "price": 90, "quantity": 1},
-                    {"name": "Tomato 500g", "brand": "Fresh & Pure", "price": 30, "quantity": 1},
-                    {"name": "Garam Masala 100g", "brand": "Everest", "price": 65, "quantity": 1},
-                ], "total": 185}
-            return {"orderId": order_id, "status": "Delivered", "items": [
-                {"name": "Mixed Vegetables", "price": 120, "quantity": 1}
-            ], "total": 120}
-        elif name == "report_error":
-            return {"success": True, "ticketId": f"TKT-{uuid.uuid4().hex[:8]}"}
         return {}
 
 

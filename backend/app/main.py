@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 import asyncio
 import json
+import httpx
 import structlog
 from app.config import settings
 from app.agent import build_graph, emit_sse
@@ -30,7 +32,7 @@ app.add_middleware(
         # Production — add your Vercel URL here
         # "https://your-app.vercel.app",
     ],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=r"https://.*\.(?:vercel\.app|onrender\.com)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,9 +64,119 @@ class ContributorApprovalRequest(BaseModel):
     user_id: str
     approval_status: bool
 
+class VoiceRequest(BaseModel):
+    text: str
+
+class CompareRequest(BaseModel):
+    ingredients: List[str]
+    location: Optional[str] = ""
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "mock_store": settings.MOCK_MCP,
+        "recipe_ai_configured": bool(settings.NVIDIA_API_KEY or settings.GEMINI_API_KEY),
+        "voice_configured": bool(settings.ELEVENLABS_API_KEY),
+    }
+
+@app.post("/api/voice")
+async def generate_voice(req: VoiceRequest):
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    if len(text) > 3000:
+        raise HTTPException(status_code=400, detail="Text is too long for one voice clip (max 3,000 characters)")
+    if not settings.ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="Voice playback is not configured on the backend")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{settings.ELEVENLABS_VOICE_ID}"
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            upstream = await client.post(
+                url,
+                params={"output_format": "mp3_44100_128"},
+                headers={
+                    "xi-api-key": settings.ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "audio/mpeg",
+                },
+                json={"text": text, "model_id": "eleven_multilingual_v2"},
+            )
+    except Exception as exc:
+        logger.error("voice.elevenlabs_unavailable", error=str(exc)[:160])
+        raise HTTPException(status_code=502, detail="Could not reach ElevenLabs") from exc
+
+    if upstream.status_code >= 400:
+        logger.error("voice.elevenlabs_error", status_code=upstream.status_code)
+        raise HTTPException(status_code=502, detail="ElevenLabs rejected the voice request; check the key and account quota")
+    return Response(content=upstream.content, media_type=upstream.headers.get("content-type", "audio/mpeg"))
+
+@app.post("/api/compare-prices")
+async def compare_online_prices(req: CompareRequest):
+    ingredients = [item.strip() for item in req.ingredients if item.strip()]
+    if not ingredients:
+        raise HTTPException(status_code=400, detail="Add ingredients before comparing stores")
+    if len(ingredients) > 30:
+        raise HTTPException(status_code=400, detail="Compare up to 30 ingredients at a time")
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="Online comparison needs GEMINI_API_KEY configured on the backend")
+
+    location = (req.location or "India").strip()[:100]
+    prompt = (
+        "Use Google Search now to compare these grocery ingredients on Swiggy Instamart, Blinkit, and Zepto. "
+        f"Search area: {location}. Ingredients: {json.dumps(ingredients, ensure_ascii=False)}. "
+        "Use only information visible in current search results or store product pages. "
+        "For every ingredient, report store, matching product/pack, listed price, and whether the source actually confirms local availability. "
+        "If price, pack size, or local stock is not explicitly visible, write 'not shown' or 'not verified'; never estimate or invent it. "
+        "Group by ingredient, prefer a compact comparison table, and end with the cheapest source-backed listed option per ingredient where possible. "
+        "Mention that grocery prices and stock can vary by delivery location and change quickly. Cite sources inline."
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            upstream = await client.post(
+                "https://generativelanguage.googleapis.com/v1beta/interactions",
+                headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+                json={
+                    "model": settings.GEMINI_MODEL,
+                    "input": prompt,
+                    "tools": [{"type": "google_search"}],
+                },
+            )
+        if upstream.status_code >= 400:
+            logger.error("compare.gemini_error", status_code=upstream.status_code)
+            raise HTTPException(
+                status_code=502,
+                detail="Gemini online search failed. Check that this API project has Google Search grounding enabled.",
+            )
+        data = upstream.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("compare.gemini_unavailable", error=str(exc)[:160])
+        raise HTTPException(status_code=502, detail="Could not reach Gemini online search") from exc
+
+    answer_parts = []
+    sources = []
+    for step in data.get("steps", []):
+        if step.get("type") != "model_output":
+            continue
+        for block in step.get("content", []):
+            if block.get("type") != "text":
+                continue
+            if block.get("text"):
+                answer_parts.append(block["text"])
+            for citation in block.get("annotations", []):
+                url = citation.get("url", "")
+                if url.startswith(("https://", "http://")):
+                    sources.append({"title": citation.get("title") or url, "url": url})
+
+    answer = "\n\n".join(answer_parts).strip()
+    if not answer:
+        raise HTTPException(status_code=502, detail="Gemini returned no comparison. Try again with fewer ingredients.")
+    unique_sources = list({source["url"]: source for source in sources}.values())
+    return {"comparison": answer, "sources": unique_sources, "location": location}
 
 @app.get("/auth/status")
 async def auth_status(session_id: str):
@@ -74,7 +186,7 @@ async def auth_status(session_id: str):
 @app.get("/auth/login")
 def auth_login(session_id: str):
     auth = MCPAuth(session_id)
-    return {"url": auth.generate_auth_url()}
+    return {"url": auth.generate_auth_url(), "mock": settings.MOCK_MCP}
 
 @app.post("/api/process")
 async def process_recipe(req: ProcessRequest):
@@ -140,6 +252,7 @@ async def run_pipeline(graph, state, session_id):
                             "pipeline_trace": current_state.get("pipeline_trace", []),
                             "pipeline_metrics": current_state.get("pipeline_metrics", {}),
                             "validation": current_state.get("cart_validation_result", {}),
+                            "mock_mode": settings.MOCK_MCP,
                         })
 
     except GraphInterrupt as e:

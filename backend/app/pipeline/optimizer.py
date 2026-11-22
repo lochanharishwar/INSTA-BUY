@@ -178,10 +178,17 @@ def rank_and_optimize(
         needed_grams = ing.get("quantity_grams")
 
         # ─── Dynamic pantry check via vector inventory ────────────
-        is_pantry_likely, pantry_matches = _check_pantry_via_vector(
-            ingredient_name=ing_name,
-            session_id=session_id,
+        has_inventory_history = bool(
+            user_context
+            and (getattr(user_context, "recent_purchases", None) or getattr(user_context, "go_to_items", None))
         )
+        if has_inventory_history:
+            is_pantry_likely, pantry_matches = _check_pantry_via_vector(
+                ingredient_name=ing_name,
+                session_id=session_id,
+            )
+        else:
+            is_pantry_likely, pantry_matches = False, []
 
         # If the vector store detected this as a pantry item with very
         # high confidence (similarity ≥ 0.95), skip it entirely (like
@@ -210,7 +217,7 @@ def rank_and_optimize(
         prep_note = ing.get("preparation_note")
         ingredient_query = f"{ing_name} ({prep_note})" if prep_note else ing_name
         
-        ef = _get_embedding_fn()
+        ef = _get_embedding_fn() if unique_product_names else None
         if ef and unique_product_names:
             try:
                 # Batch all comparisons: query + all unique product names

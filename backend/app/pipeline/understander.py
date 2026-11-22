@@ -1,6 +1,7 @@
 import json
 import hashlib
 import re
+import uuid
 import structlog
 from openai import AsyncOpenAI
 from redis import Redis
@@ -110,6 +111,17 @@ async def understand_recipe(content: str) -> RecipeSchema:
         data = json.loads(cached)
         return RecipeSchema(**data)
 
+    # Keep text-based recipes usable in local/demo mode when no hosted LLM
+    # credentials are configured. This deliberately supports ingredient-list
+    # formats only; it does not pretend to understand arbitrary prose.
+    if not settings.NVIDIA_API_KEY and not settings.GEMINI_API_KEY:
+        recipe = _parse_recipe_without_llm(content)
+        try:
+            redis_client.setex(cache_key, RECIPE_CACHE_TTL, json.dumps(recipe.model_dump()))
+        except Exception as e:
+            logger.warning("understander.redis_cache_failed", error=str(e)[:100])
+        return recipe
+
     user_prompt = f"Schema:\n{SCHEMA_TEMPLATE}\n\nContent:\n{content[:4000]}"
     errors = []
 
@@ -146,6 +158,85 @@ async def understand_recipe(content: str) -> RecipeSchema:
     )
 
 
+def _parse_recipe_without_llm(content: str) -> RecipeSchema:
+    """Parse common quantity-first ingredient-list lines without an API key."""
+    unit_pattern = (
+        r"g|gm|gms|gram|grams|kg|ml|l|litre|liter|litres|liters|"
+        r"tsp|teaspoon|teaspoons|tbsp|tablespoon|tablespoons|"
+        r"cup|cups|piece|pieces|pcs|clove|cloves|pinch|pinches|bunch|bunches"
+    )
+    line_pattern = re.compile(
+        rf"^\s*(?:[-*•]\s*)?(?P<quantity>\d+(?:\s*/\s*\d+|\.\d+)?|½|¼|¾)\s*"
+        rf"(?P<unit>{unit_pattern})?\s*(?:of\s+)?(?P<name>[\w][\w\s()'’-]*?)\s*$",
+        re.IGNORECASE,
+    )
+    fraction_values = {"½": 0.5, "¼": 0.25, "¾": 0.75}
+    ingredients: list[Ingredient] = []
+    title = "Recipe"
+    serving_size = 4
+    in_ingredients = False
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if title == "Recipe" and len(line) < 100 and not re.match(r"^[-*•\d]", line):
+            title = re.sub(r"^#+\s*", "", line).strip(" :#") or title
+        serving = re.search(r"(?:serves?|servings?)\s*[:=-]?\s*(\d+)", line, re.IGNORECASE)
+        if serving:
+            serving_size = max(1, min(int(serving.group(1)), 50))
+        if re.match(r"^(?:ingredients?|what you(?:'|’)ll need)\s*:?\s*$", line, re.IGNORECASE):
+            in_ingredients = True
+            continue
+        if in_ingredients and re.match(r"^(?:instructions?|method|directions?|steps?)\s*:?\s*$", line, re.IGNORECASE):
+            in_ingredients = False
+            continue
+        if not in_ingredients and not re.match(r"^[-*•]\s*", line):
+            continue
+
+        match = line_pattern.match(line)
+        if not match:
+            continue
+        quantity_text = match.group("quantity").replace(" ", "")
+        if quantity_text in fraction_values:
+            quantity = fraction_values[quantity_text]
+        elif "/" in quantity_text:
+            numerator, denominator = quantity_text.split("/", 1)
+            quantity = float(numerator) / max(float(denominator), 1)
+        else:
+            quantity = float(quantity_text)
+        unit = (match.group("unit") or "piece").lower()
+        name = re.sub(r"\s+(?:to taste|as needed)$", "", match.group("name").strip(), flags=re.IGNORECASE)
+        name = re.sub(r"\s*,?\s*(?:finely|roughly|thinly)?\s*(?:chopped|diced|minced|grated|sliced)$", "", name, flags=re.IGNORECASE)
+        name = name.strip(" ,.-")
+        if len(name) < 2:
+            continue
+        canonical = name.lower()
+        category = "Spices" if any(word in canonical for word in ("powder", "spice", "salt", "pepper", "masala", "cumin", "turmeric")) else "Pantry"
+        if any(word in canonical for word in ("tomato", "onion", "potato", "chilli", "spinach", "ginger", "garlic", "coriander")):
+            category = "Produce"
+        elif any(word in canonical for word in ("milk", "cream", "cheese", "paneer", "curd", "yogurt", "butter")):
+            category = "Dairy"
+        elif any(word in canonical for word in ("chicken", "mutton", "fish", "egg", "tofu")):
+            category = "Protein"
+        ingredients.append(Ingredient(
+            id=str(uuid.uuid4()), raw_name=name, canonical_name=canonical,
+            quantity=quantity, unit=unit, category=category,
+        ))
+
+    if len(ingredients) < 2:
+        raise ValueError(
+            "No AI key is configured. Paste a recipe with an Ingredients section and at least two quantity-first lines, "
+            "for example: '2 tomatoes' and '1 tsp salt'."
+        )
+
+    return RecipeSchema(
+        recipe_name=title[:100], cuisine_type="Unknown", serving_size=serving_size,
+        prep_time_minutes=0, cook_time_minutes=0, equipment_needed=[], dietary_tags=[],
+        confidence_score=0.65, ingredients=ingredients,
+    )
+
+
 async def _call_nvidia(user_prompt: str) -> RecipeSchema:
     """Call NVIDIA NIM (Llama 3.1 8B) via OpenAI-compatible API."""
     client = AsyncOpenAI(
@@ -176,35 +267,34 @@ async def _call_nvidia(user_prompt: str) -> RecipeSchema:
 
 
 async def _call_gemini(user_prompt: str) -> RecipeSchema:
-    """Call Google Gemini via OpenAI-compatible endpoint."""
+    """Call the Gemini generateContent API and require a JSON response."""
     import httpx
 
     logger.info("understander.gemini.generating", content_length=len(user_prompt))
 
-    # Gemini supports OpenAI-compatible API via generativelanguage endpoint
-    url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent"
     payload = {
-        "model": "gemini-2.0-flash",
-        "messages": [
-            {"role": "user", "content": f"{SYSTEM_PROMPT}\n\n{user_prompt}"}
-        ],
-        "temperature": 0.1,
-        "max_tokens": 4096,
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 4096,
+            "responseMimeType": "application/json",
+        },
     }
 
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
             url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {settings.GEMINI_API_KEY}",
-            },
+            headers={"x-goog-api-key": settings.GEMINI_API_KEY},
             json=payload,
         )
         response.raise_for_status()
         data = response.json()
-        response_text = data["choices"][0]["message"]["content"]
+        try:
+            response_text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError("Gemini returned no recipe JSON") from exc
 
     return _parse_llm_response(response_text, "gemini")
 

@@ -21,7 +21,9 @@ import {
   Clock,
   Sparkles,
   RefreshCw,
-  PlusCircle
+  PlusCircle,
+  Volume2,
+  Search,
 } from 'lucide-react'
 import { getDialogue } from '../lib/hindi-dialogues'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -33,6 +35,13 @@ const STATUS: Record<string, { label: string; color: string; bg: string; border:
   substitute:  { label: 'Substitute',  color: 'text-blue-700',   bg: 'bg-blue-50',   border: 'border-blue-100' },
   unavailable: { label: 'Unavailable', color: 'text-gray-600',   bg: 'bg-gray-50',   border: 'border-gray-100' },
   pantry:      { label: 'In pantry',   color: 'text-indigo-700', bg: 'bg-indigo-50', border: 'border-indigo-100' },
+}
+
+const storeSearchUrl = (store: string, ingredient: string) => {
+  const query = encodeURIComponent(ingredient)
+  if (store === 'Blinkit') return `https://blinkit.com/s/?q=${query}`
+  if (store === 'Zepto') return `https://www.zepto.com/search?query=${query}`
+  return `https://www.swiggy.com/instamart/search?custom_back=true&query=${query}`
 }
 
 export default function CartReview() {
@@ -53,6 +62,13 @@ export default function CartReview() {
   const [copied, setCopied] = useState(false)
   const [copiedLinkFor, setCopiedLinkFor] = useState<string | null>(null)
   const [dialogue, setDialogue] = useState<{ text: string; movie: string; emoji: string } | null>(null)
+  const [voiceLoading, setVoiceLoading] = useState(false)
+  const [voiceError, setVoiceError] = useState('')
+  const [compareLoading, setCompareLoading] = useState(false)
+  const [compareError, setCompareError] = useState('')
+  const [compareLocation, setCompareLocation] = useState('')
+  const [comparison, setComparison] = useState<{ comparison: string; location: string; sources: { title: string; url: string }[] } | null>(null)
+  const isDemoMode = Boolean(cart_proposal?.mock_mode)
 
   useEffect(() => {
     // Set dialogue according to cart conditions
@@ -68,7 +84,7 @@ export default function CartReview() {
 
   const handleCopyList = async () => {
     const text = cart_items
-      .filter((i: CartItem) => i.spin_id && i.user_category === 'more_wanted')
+      .filter((i: CartItem) => i.user_category === 'more_wanted' || i.user_category === 'less_wanted')
       .map((i: CartItem) => `${i.ingredient_name} — ${i.product_name} (${i.product_quantity_display}) ₹${i.product_price}`)
       .join('\n')
     try {
@@ -84,6 +100,42 @@ export default function CartReview() {
       document.body.removeChild(textarea)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  const handleReadList = async () => {
+    const items = cart_items.filter((item: CartItem) => item.user_category === 'more_wanted' || item.user_category === 'less_wanted')
+    if (!items.length) return
+    const text = `Shopping list. ${items.map((item: CartItem) => `${item.ingredient_quantity_display} ${item.ingredient_name}`).join('. ')}.`
+    setVoiceLoading(true)
+    setVoiceError('')
+    try {
+      const blob = await api.generateVoice(text)
+      const audioUrl = URL.createObjectURL(blob)
+      const audio = new Audio(audioUrl)
+      audio.onended = () => URL.revokeObjectURL(audioUrl)
+      audio.onerror = () => URL.revokeObjectURL(audioUrl)
+      await audio.play()
+    } catch (error) {
+      setVoiceError(error instanceof Error ? error.message : 'Could not generate voice audio.')
+    } finally {
+      setVoiceLoading(false)
+    }
+  }
+
+  const handleCompareOnline = async () => {
+    const ingredients = cart_items
+      .filter((item: CartItem) => item.user_category === 'more_wanted' || item.user_category === 'less_wanted')
+      .map((item: CartItem) => `${item.ingredient_name} (${item.ingredient_quantity_display})`)
+    if (!ingredients.length) return
+    setCompareLoading(true)
+    setCompareError('')
+    try {
+      setComparison(await api.compareOnlinePrices(ingredients, compareLocation))
+    } catch (error) {
+      setCompareError(error instanceof Error ? error.message : 'Online comparison failed. Try again.')
+    } finally {
+      setCompareLoading(false)
     }
   }
 
@@ -158,7 +210,14 @@ export default function CartReview() {
             Review and adjust items based on what you actually need.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleReadList}
+            disabled={voiceLoading || !cart_items.some((item: CartItem) => item.user_category === 'more_wanted' || item.user_category === 'less_wanted')}
+            className="flex items-center gap-2 text-xs font-bold text-orange-700 hover:text-orange-900 bg-orange-50 px-4 py-3 rounded-xl border border-orange-100 transition-all shadow-sm disabled:opacity-50"
+          >
+            <Volume2 className="w-3.5 h-3.5" /> {voiceLoading ? 'Generating voice…' : 'Read list aloud'}
+          </button>
           <button
             onClick={handleCopyList}
             className="flex items-center gap-2 text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] bg-white px-4 py-3 rounded-xl border border-[var(--border-color)] transition-all shadow-sm active:scale-95"
@@ -168,6 +227,33 @@ export default function CartReview() {
           </button>
         </div>
       </div>
+      {voiceError && <p role="alert" className="-mt-3 mb-5 text-xs text-red-700">{voiceError}</p>}
+
+      <section className="mb-6 rounded-2xl border border-orange-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex-1">
+            <h3 className="flex items-center gap-2 text-sm font-bold text-stone-900"><Search className="h-4 w-4 text-orange-600" /> Compare current online listings</h3>
+            <p className="mt-1 text-xs text-stone-600">Gemini searches the web for listed prices and links its sources. Local stock must be confirmed in the store app.</p>
+            <label className="mt-3 block text-xs font-semibold text-stone-700" htmlFor="comparison-location">City or PIN code (optional)</label>
+            <input id="comparison-location" value={compareLocation} onChange={(event) => setCompareLocation(event.target.value)} placeholder="e.g. Bengaluru 560001" className="mt-1 w-full max-w-sm rounded-lg border border-stone-200 px-3 py-2 text-sm outline-none focus:border-orange-400" />
+          </div>
+          <button onClick={handleCompareOnline} disabled={compareLoading || !cart_items.some((item: CartItem) => item.user_category === 'more_wanted' || item.user_category === 'less_wanted')} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-orange-600 px-4 py-2 text-xs font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50">
+            {compareLoading ? <><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" /> Searching stores...</> : <><Search className="h-3.5 w-3.5" /> Compare online</>}
+          </button>
+        </div>
+        {compareError && <p role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{compareError}</p>}
+        {comparison && <div className="mt-4 border-t border-stone-100 pt-4">
+          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-stone-500">Web comparison · {comparison.location || 'India'}</p>
+          <div className="whitespace-pre-wrap text-sm leading-6 text-stone-800">{comparison.comparison}</div>
+          {comparison.sources?.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{comparison.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-stone-100 px-2.5 py-1.5 text-[10px] font-semibold text-stone-700 hover:bg-stone-200"><Link2 className="h-3 w-3" />{source.title}</a>)}</div>}
+        </div>}
+      </section>
+
+      {isDemoMode && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950">
+          <strong>Store search mode:</strong> Gemini extracts the recipe, then these links open each store's search page. Check live prices and stock there. This app does not need a Swiggy account and cannot place orders without Swiggy partner access.
+        </div>
+      )}
 
       {/* Hindi Movie Dialogue */}
       {dialogue && (
@@ -340,19 +426,24 @@ export default function CartReview() {
             <div className="bg-amber-50/50 border border-amber-200/60 rounded-2xl p-5">
               <div className="flex items-center gap-2 mb-2">
                 <AlertTriangle className="w-4.5 h-4.5 text-amber-600" />
-                <h3 className="text-sm font-bold text-amber-900">Not Available on Instamart (Buy offline)</h3>
+                <h3 className="text-sm font-bold text-amber-900">{isDemoMode ? 'Find ingredients in a store' : 'Not Available on Instamart'}</h3>
               </div>
               <p className="text-xs text-amber-800/80 mb-3">
-                These items couldn't be matched with any variant in local store inventory. You might need to buy them locally.
+                {isDemoMode ? 'Search each ingredient on a grocery service. Results and availability depend on your location and account.' : 'These items could not be matched with a product in the connected store.'}
               </p>
-              <div className="flex flex-wrap gap-2">
+              <div className="space-y-2">
                 {unavailableItems.map(({ item, idx }) => (
-                  <span key={idx} className="text-xs bg-white px-3 py-1.5 rounded-xl text-amber-800 border border-amber-200/80 font-semibold shadow-sm flex items-center gap-1.5">
-                    {item.ingredient_name} ({item.ingredient_quantity_display})
+                  <div key={idx} className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200/80 bg-white p-3 text-xs font-semibold text-amber-900 shadow-sm">
+                    <span>{item.ingredient_name} ({item.ingredient_quantity_display})</span>
+                    {['Swiggy Instamart', 'Blinkit', 'Zepto'].map((store) => (
+                      <a key={store} href={storeSearchUrl(store, item.ingredient_name)} target="_blank" rel="noopener noreferrer" className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-900 hover:bg-amber-100">
+                        Search {store}
+                      </a>
+                    ))}
                     <button onClick={() => handleRemove(idx)} className="text-amber-400 hover:text-red-500 transition">
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
-                  </span>
+                  </div>
                 ))}
               </div>
             </div>
@@ -364,13 +455,13 @@ export default function CartReview() {
           {/* Metrics summary */}
           <div className="bg-gradient-to-br from-orange-500 to-amber-500 text-white rounded-3xl p-6 shadow-md shadow-orange-500/10">
             <h3 className="font-extrabold text-lg tracking-tight mb-4 flex items-center gap-2">
-              <ShoppingCart className="w-5 h-5" /> Instamart Cart
+              <ShoppingCart className="w-5 h-5" /> {isDemoMode ? 'Ingredients to find' : 'Instamart Cart'}
             </h3>
             
             <div className="space-y-3.5 border-b border-white/20 pb-4">
               <div className="flex justify-between items-center text-sm">
-                <span className="text-white/80 font-medium">Zaroori Items</span>
-                <span className="font-bold">{zarooriItems.length} items</span>
+                <span className="text-white/80 font-medium">{isDemoMode ? 'Ingredients' : 'Zaroori Items'}</span>
+                <span className="font-bold">{isDemoMode ? unavailableItems.length : zarooriItems.length} items</span>
               </div>
               {kamZarooriItems.length > 0 && (
                 <div className="flex justify-between items-center text-sm">
@@ -392,13 +483,15 @@ export default function CartReview() {
               )}
             </div>
 
-            <div className="pt-4 flex justify-between items-end">
+            {isDemoMode ? (
+              <p className="pt-4 text-sm text-white/90">Search ingredients in a store and add them there.</p>
+            ) : <div className="pt-4 flex justify-between items-end">
               <div>
                 <p className="text-[10px] text-white/70 uppercase tracking-widest font-extrabold">Grand Total</p>
                 <p className="text-3xl font-black mt-0.5 tracking-tight">₹{total}</p>
               </div>
               <span className="bg-white/10 px-3 py-1.5 rounded-xl text-xs font-bold border border-white/10">COD Enabled</span>
-            </div>
+            </div>}
           </div>
 
           {/* HostelSync Group Split Details */}
@@ -479,27 +572,19 @@ export default function CartReview() {
               </div>
             )}
             
-            <button
-              onClick={handleConfirm}
-              disabled={
-                loading || 
-                buyableItems.length === 0 || 
-                (session_type === 'group' && contributors.some(c => !c.approval_status))
-              }
-              className="w-full btn-primary py-4 text-base rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
-            >
-              {loading ? (
-                <>
-                  <span className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-                  Building Instamart Cart...
-                </>
-              ) : (
-                <>
-                  Place Instamart Order
-                  <ArrowRight className="w-5 h-5" />
-                </>
-              )}
-            </button>
+            {isDemoMode ? (
+              <p className="rounded-xl bg-stone-50 px-4 py-3 text-xs leading-relaxed text-stone-600">
+                Checkout needs Swiggy partner access. Use the store search links beside each ingredient to add items in the store app.
+              </p>
+            ) : (
+              <button
+                onClick={handleConfirm}
+                disabled={loading || buyableItems.length === 0 || (session_type === 'group' && contributors.some(c => !c.approval_status))}
+                className="w-full btn-primary py-4 text-base rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+              >
+                {loading ? <><span className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" /> Building Instamart Cart...</> : <>Place Instamart Order<ArrowRight className="w-5 h-5" /></>}
+              </button>
+            )}
 
             <button
               onClick={() => setScreen('input')}
@@ -572,6 +657,20 @@ function CartItemRow({
               <p className="font-extrabold text-[var(--text-primary)] text-sm">₹{item.product_price * (item.quantity || 1)}</p>
               <p className="text-[10px] text-[var(--text-muted)] mt-0.5">₹{item.product_price}/unit</p>
             </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2" aria-label={`Search ${item.ingredient_name} in grocery stores`}>
+            {['Swiggy Instamart', 'Blinkit', 'Zepto'].map((store) => (
+              <a
+                key={store}
+                href={storeSearchUrl(store, item.ingredient_name)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-lg border border-orange-100 bg-orange-50 px-2.5 py-1.5 text-[10px] font-bold text-orange-800 hover:bg-orange-100"
+              >
+                <Link2 className="h-3 w-3" /> Search {store}
+              </a>
+            ))}
           </div>
 
           {/* Quality metrics / History alert */}

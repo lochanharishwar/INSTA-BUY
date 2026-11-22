@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useStore } from '../lib/store'
+import { API_URL } from '../../lib/api'
 import { Check, Loader2, Play, Flame, AlertCircle } from 'lucide-react'
 import { getDialogue } from '../lib/hindi-dialogues'
 
@@ -15,11 +16,15 @@ export default function PipelineProgress() {
   useEffect(() => {
     if (!session_id) return;
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const evtSource = new EventSource(`${API_URL}/api/stream?session_id=${session_id}`);
+    const evtSource = new EventSource(`${API_URL}/api/stream?session_id=${encodeURIComponent(session_id)}`);
 
     evtSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      let data: any;
+      try {
+        data = JSON.parse(event.data);
+      } catch {
+        return;
+      }
       if (data.stage === 'heartbeat') return;
       addEvent(data);
 
@@ -27,6 +32,14 @@ export default function PipelineProgress() {
         setCartProposal(data);
         setTimeout(() => setScreen('review'), 1000);
       }
+    };
+
+    evtSource.onerror = () => {
+      addEvent({
+        stage: 'error',
+        message: `Lost connection to the backend at ${API_URL}. Check that the backend is running, then try again.`,
+      });
+      evtSource.close();
     };
 
     return () => evtSource.close();
