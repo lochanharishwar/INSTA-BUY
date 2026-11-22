@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from 'react'
+import { api } from '../../lib/api'
 
 type Ingredient = { ingredient: string; amount: string; pack: string; prices: number[] }
 
@@ -31,6 +32,10 @@ export default function DemoExperience() {
   const [onlineRecipe, setOnlineRecipe] = useState<{ id: string; video?: string; instructions?: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [listening, setListening] = useState(false)
+  const [location, setLocation] = useState('')
+  const [pricing, setPricing] = useState(false)
+  const [priceError, setPriceError] = useState('')
+  const [priceResult, setPriceResult] = useState<{ comparison: string; sources: { title: string; url: string }[] } | null>(null)
   const [message, setMessage] = useState('')
   const recognition = useRef<Recognition | null>(null)
   useEffect(() => () => recognition.current?.abort(), [])
@@ -67,6 +72,8 @@ export default function DemoExperience() {
     if (!dish || busy) return
     setMessage('')
     setBusy(true)
+    setPriceResult(null)
+    setPriceError('')
     try {
       if (/^(paneer butter masala|butter paneer)$/i.test(dish)) {
         setTitle('Paneer butter masala')
@@ -75,7 +82,7 @@ export default function DemoExperience() {
         setOnlineRecipe(null)
         return
       }
-      const response = await fetch('https://www.themealdb.com/api/json/v1/1/search.php?s=' + encodeURIComponent(dish))
+      const response = await fetch('https://www.themealdb.com/api/json/v1/1/search.php?s=' + encodeURIComponent(dish), { signal: AbortSignal.timeout(12000) })
       if (!response.ok) throw new Error('Recipe lookup failed')
       const data: { meals: Record<string, string | null>[] | null } = await response.json()
       const meal = data.meals?.[0]
@@ -114,11 +121,34 @@ export default function DemoExperience() {
   const totals = stores.map((_, index) => recipe.reduce((sum, item, row) => sum + (selected[row] ? item.prices[index] ?? 0 : 0), 0))
   const total = totals[store]
   const lowestTotal = Math.min(...totals)
+  async function comparePrices(event: React.FormEvent) {
+    event.preventDefault()
+    if (pricing || !location.trim()) return
+    const ingredients = recipe.filter((_, index) => selected[index]).map(item => [item.amount, item.ingredient].filter(Boolean).join(' '))
+    if (!ingredients.length) return
+    setPricing(true)
+    setPriceResult(null)
+    setPriceError('')
+    try {
+      const result = await api.compareOnlinePrices(ingredients, location.trim())
+      if (!result?.comparison || !result.sources?.length) {
+        throw new Error('No source-backed prices were found. Open the store links to check directly.')
+      }
+      setPriceResult(result)
+    } catch (error) {
+      setPriceError(error instanceof Error ? error.message : 'Online price lookup failed.')
+    } finally {
+      setPricing(false)
+    }
+  }
+
   const reset = () => {
     setScreen('recipe')
     setStore(0)
     setSelected(recipe.map(() => true))
     setDelivery(0)
+    setPriceResult(null)
+    setPriceError('')
   }
 
   return (
@@ -175,6 +205,34 @@ export default function DemoExperience() {
         </div>
       )}
 
+      {screen === 'cart' && (
+        <form onSubmit={comparePrices} className="card space-y-4 p-5">
+          <div>
+            <h2 className="text-xl font-bold">Search online prices</h2>
+            <p className="mt-1 text-sm text-stone-600">Search public listings from Instamart, Blinkit, and Zepto. Check delivery fees and stock in the store app.</p>
+          </div>
+          <label htmlFor="price-location" className="block font-semibold">Delivery area or PIN code</label>
+          <div className="flex flex-wrap gap-2">
+            <input id="price-location" value={location} onChange={event => setLocation(event.target.value)} maxLength={100}
+              placeholder="e.g. Bengaluru 560001" className="min-w-48 flex-1 rounded-xl border border-stone-300 px-4 py-2" />
+            <button className="btn-primary" disabled={pricing || !location.trim() || !selected.some(Boolean)}>
+              {pricing ? 'Searching stores…' : 'Compare online prices'}
+            </button>
+          </div>
+          {priceError && <p role="alert" className="text-sm text-red-800">{priceError}</p>}
+          {priceResult && (
+            <div aria-live="polite" className="space-y-3">
+              <p className="whitespace-pre-wrap text-sm">{priceResult.comparison}</p>
+              <ul className="flex flex-wrap gap-3 text-sm">
+                {priceResult.sources.map(source => (
+                  <li key={source.url}><a className="text-orange-800 underline" href={source.url} target="_blank" rel="noreferrer">{source.title}</a></li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </form>
+      )}
+
       {screen === 'cart' && onlineRecipe && (
         <div className="card space-y-4 p-6">
           <h2 className="text-2xl font-bold">Find ingredients by store</h2>
@@ -190,7 +248,7 @@ export default function DemoExperience() {
               </div>
             </div>
           })}
-          <button className="btn-ghost" onClick={() => setScreen('recipe')}>Back to recipe</button>
+          <button className="btn-ghost" disabled={pricing} onClick={() => setScreen('recipe')}>Back to recipe</button>
         </div>
       )}
 
@@ -219,8 +277,8 @@ export default function DemoExperience() {
             ))}
           </ul>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <button type="button" className="btn-ghost" onClick={() => setScreen('recipe')}>Back to recipe</button>
-            <button type="button" className="btn-primary" disabled={total === 0} onClick={() => setScreen('tracking')}>Place demo order · ₹{total}</button>
+            <button type="button" className="btn-ghost" disabled={pricing} onClick={() => setScreen('recipe')}>Back to recipe</button>
+            <button type="button" className="btn-primary" disabled={pricing || total === 0} onClick={() => setScreen('tracking')}>Place demo order · ₹{total}</button>
           </div>
         </div>
       )}

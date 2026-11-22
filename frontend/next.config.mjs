@@ -5,6 +5,7 @@ const backendOrigin = backendHost
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  distDir: process.env.INSTACHEF_BUILD_DIR || '.next',
   async rewrites() {
     return [
       {

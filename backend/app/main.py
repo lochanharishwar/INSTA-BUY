@@ -129,7 +129,9 @@ async def compare_online_prices(req: CompareRequest):
         "Use only information visible in current search results or store product pages. "
         "For every ingredient, report store, matching product/pack, listed price, and whether the source actually confirms local availability. "
         "If price, pack size, or local stock is not explicitly visible, write 'not shown' or 'not verified'; never estimate or invent it. "
-        "Group by ingredient, prefer a compact comparison table, and end with the cheapest source-backed listed option per ingredient where possible. "
+        "Group by ingredient and identify the cheapest source-backed option that covers the requested quantity. "
+        "Compare single-store basket totals only when every requested ingredient has a sourced price at that store. "
+        "Calculate totals for sufficient pack quantities and label them as excluding delivery fees. "
         "Mention that grocery prices and stock can vary by delivery location and change quickly. Cite sources inline."
     )
 
@@ -146,9 +148,15 @@ async def compare_online_prices(req: CompareRequest):
             )
         if upstream.status_code >= 400:
             logger.error("compare.gemini_error", status_code=upstream.status_code)
+            if upstream.status_code in (401, 403):
+                detail = "Gemini rejected the backend API key or its permissions. Check GEMINI_API_KEY and Google Search access."
+            elif upstream.status_code == 429:
+                detail = "Gemini price search reached its quota. Try again later or check your project quota."
+            else:
+                detail = f"Gemini online search failed (HTTP {upstream.status_code}). Check the configured model and Google Search access."
             raise HTTPException(
                 status_code=502,
-                detail="Gemini online search failed. Check that this API project has Google Search grounding enabled.",
+                detail=detail,
             )
         data = upstream.json()
     except HTTPException:
